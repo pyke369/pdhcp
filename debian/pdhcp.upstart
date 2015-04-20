@@ -1,0 +1,28 @@
+description "Programmable DHCP client/server"
+
+start on runlevel [2345]
+stop on runlevel [!2345]
+
+console none
+respawn
+umask 022
+
+env ENABLED=0
+env NAME=pdhcp
+env DAEMON=/usr/bin/pdhcp
+env OPTIONS=""
+env PIDFILE=/var/run/pdhcp.pid
+
+pre-start script
+  export PDHCP_STATE=start
+  [ -s /etc/default/$NAME ] && . /etc/default/$NAME
+  [ -z "$ENABLED" ] && { stop; exit 0; }
+  [ ! -x "$DAEMON" ] && { stop; exit 0; }
+  mkdir -p `dirname $PIDFILE`
+  exit 0
+end script
+
+script
+  [ -s /etc/default/$NAME ] && . /etc/default/$NAME
+  $DAEMON --pidfile $PIDFILE $OPTIONS
+end script
