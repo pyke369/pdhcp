@@ -10,6 +10,7 @@
 #include <getopt.h>
 #include <libgen.h>
 #include <errno.h>
+#include <time.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/if_ether.h>
@@ -26,7 +27,7 @@
 #include <dhcp.h>
 
 // defines
-#define  PDHCP_VERSION                 "1.0.0"
+#define  PDHCP_VERSION                 "1.0.1"
 #define  PDHCP_MAX_WORKERS             (32)
 #define  PDHCP_DEFAULT_PIDFILE         ("/var/run/pdhcp.pid")
 #define  PDHCP_DEFAULT_ADDRESS         ("0.0.0.0")

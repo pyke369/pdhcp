@@ -1,3 +1,9 @@
+pdhcp (1.0.1) stable; urgency=medium
+
+  * add missing include for time() function
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Sat, 08 Aug 2015 12:28:56 +0200
+
 pdhcp (1.0.0) stable; urgency=medium
 
   * initial revision
