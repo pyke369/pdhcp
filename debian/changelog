@@ -1,3 +1,9 @@
+pdhcp (1.0.2) stable; urgency=medium
+
+  * add reqspec support in client mode
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Wed, 12 Aug 2015 17:13:34 +0200
+
 pdhcp (1.0.1) stable; urgency=medium
 
   * add missing include for time() function

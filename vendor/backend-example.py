@@ -16,6 +16,7 @@ while True:
                 if line == '':
                     os._exit(0)
                 request  = json.loads(line)
+                sys.stderr.write('--- received request ---\n' + json.dumps(request, indent = 4))
                 response = {
                    'dhcp-message-type':       'offer' if request.get('dhcp-message-type', '') == 'discover' else 'ack',
                    'client-hardware-address': request.get('client-hardware-address', ''),
@@ -31,6 +32,7 @@ while True:
                    'bootp-server-address':    '192.168.37.128',
                    'bootp-filename':          'pxelinux.0'
                 }
+                sys.stderr.write('--- sent response ---\n' + json.dumps(response, indent = 4))
                 sys.stdout.write(json.dumps(response) + '\n')
                 sys.stdout.flush()
             except:

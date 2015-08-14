@@ -60,6 +60,5 @@ u_char    *get_ip_address(char *, bool);
 pid_t     exec_command(char *, char *, char *, int *, int *, int *);
 void      log_message(char, const char *, ...);
 uint16_t  compute_crc16(uint8_t *, int);
-void      dump_data(char *, u_char *, int, FILE *, int);
 
 #endif

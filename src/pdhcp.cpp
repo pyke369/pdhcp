@@ -27,7 +27,7 @@
 #include <dhcp.h>
 
 // defines
-#define  PDHCP_VERSION                 "1.0.1"
+#define  PDHCP_VERSION                 "1.0.2"
 #define  PDHCP_MAX_WORKERS             (32)
 #define  PDHCP_DEFAULT_PIDFILE         ("/var/run/pdhcp.pid")
 #define  PDHCP_DEFAULT_ADDRESS         ("0.0.0.0")
@@ -82,7 +82,7 @@ ev_timer       tick_watcher;
 time_t         next = 0, delta = 2;
 uint32_t       xid = 0;
 int            workers_count = 1, retries = 3, service = -1, verbose = false;
-char           *pidfile = NULL, *address = NULL, *port = NULL, *interface = NULL, *backend = NULL, *user = NULL, *group = NULL;
+char           *pidfile = NULL, *address = NULL, *port = NULL, *interface = NULL, *backend = NULL, *user = NULL, *group = NULL, *extra = NULL;
 
 // worker stdout handler
 void worker_stdout_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
@@ -387,7 +387,11 @@ void tick_handler(struct ev_loop *loop, struct ev_timer *watcher, int events)
             udp_cksum  = (struct udpcksum *)check;
             frame      = (DHCP_FRAME *)(packet + sizeof(struct ether_header) + sizeof(struct iphdr) + sizeof(struct udphdr));
 
-            offset += snprintf(request, sizeof(request), "{\"dhcp-message-type\":\"discover\",\"client-hardware-address\":\"%s\"", get_mac_address(interface, false));
+            offset += snprintf(request + offset, sizeof(request) - offset, "{\"client-hardware-address\":\"%s\"", get_mac_address(interface, false));
+            if (extra)
+            {
+                offset += snprintf(request + offset, sizeof(request) - offset, ",%s", extra);
+            }
             if (!gethostname(message, sizeof(message)))
             {
                 offset += snprintf(request + offset, sizeof(request) - offset, ",\"hostname\":\"%s\"", message);
@@ -397,11 +401,16 @@ void tick_handler(struct ev_loop *loop, struct ev_timer *watcher, int events)
             {
                 offset += snprintf(request + offset, sizeof(request) - offset, ",\"bootp-client-address\":\"%s\"", message);
             }
-            snprintf(request + offset, sizeof(request) - offset,
-                     ",\"parameters-request-list\":[\"hostname\",\"subnet-mask\",\"routers\",\"domain-name\",\"domain-name-servers\",\"time-offset\",\"ntp-servers\"]}");
+            offset += snprintf(request + offset, sizeof(request) - offset,
+                               ",\"dhcp-message-type\":\"discover\",\"parameters-request-list\":[\"hostname\",\"subnet-mask\",\"routers\",\"domain-name\",\"domain-name-servers\",\"time-offset\",\"ntp-servers\"]}");
             if (!dhcp_encode(request, frame, &size, message, sizeof(message)))
             {
                 log_message(LOG_CRIT, "error building DHCP request: %s - aborting", message);
+                exit(1);
+            }
+            if (frame->op != DHCP_FRAME_BOOTREQUEST)
+            {
+                log_message(LOG_CRIT, "only DHCP requests can be sent in client mode (dhcp-%s is a DHCP response message) - aborting",  dhcp_messages_types[frame->dhcp_type]);
                 exit(1);
             }
             xid = frame->xid;
@@ -443,7 +452,8 @@ void tick_handler(struct ev_loop *loop, struct ev_timer *watcher, int events)
             }
             if (verbose)
             {
-                log_message(LOG_INFO, "dhcp-discover for %02x:%02x:%02x:%02x:%02x:%02x/%08x sent to 255.255.255.255:%d",
+                log_message(LOG_INFO, "dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x sent to 255.255.255.255:%d",
+                            dhcp_messages_types[frame->dhcp_type],
                             frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5], ntohl(frame->xid), atoi(port));
             }
 
@@ -465,13 +475,14 @@ int main(int argc, char **argv)
         static struct option options[] =
         {
             {"help",        0, NULL, 'h'},
-            {"version",     0, NULL, 'x'},
+            {"version",     0, NULL, 'V'},
             {"verbose",     0, NULL, 'v'},
             {"listkeys",    0, NULL, 'l'},
             {"port",        1, NULL, 'p'},
             {"address",     1, NULL, 'a'},
             {"interface",   1, NULL, 'i'},
             {"retries",     1, NULL, 'r'},
+            {"request",     1, NULL, 'R'},
             {"backend",     1, NULL, 'b'},
             {"credentials", 1, NULL, 'c'},
             {"workers",     1, NULL, 'n'},
@@ -479,7 +490,7 @@ int main(int argc, char **argv)
             {"pidfile",     1, NULL, 'z'},
             {NULL,          0, NULL,  0 }
         };
-        while ((option = getopt_long(argc, argv, "hxvlp:a:i:r:b:c:n:f:z:", options, NULL)) != -1)
+        while ((option = getopt_long(argc, argv, "hVvlp:a:i:r:R:b:c:n:f:z:", options, NULL)) != -1)
         {
             switch (option)
             {
@@ -489,13 +500,14 @@ int main(int argc, char **argv)
                         stderr,
                         "Usage: pdhcp [OPTIONS...]\n\n"
                         "-h, --help                        show this help screen and exit\n"
-                        "-x, --version                     display program version and exit\n"
+                        "-V, --version                     display program version and exit\n"
                         "-v, --verbose                     \n"
                         "-l, --listkeys                    list all keys useable in the communication protocol with workers\n"
                         "-p, --port <port>                 use specified server UDP port (default: %s)\n"
                         "-a, --address <address>           use specified server address (default: %s)\n"
                         "-i, --interface <name>            use specified interface (default: first available)\n"
                         "-r, --retries <count>             set requests retry count in client mode (default: %d)\n"
+                        "-R, --request <reqspec>           add specified DHCP attributes to request in client mode\n"
                         "-b, --backend <command>           run backend command in server mode (default: client mode)\n"
                         "-c, --credentials <user[:group]>  use specified credentials for backend command in server mode (default: main process credentials)\n"
                         "-n, --workers <count>             set workers count in server mode (default: 1)\n"
@@ -509,7 +521,7 @@ int main(int argc, char **argv)
                     return 1;
                     break;
 
-                case 'x':
+                case 'V':
                     fprintf(stderr, "pdhcp v" PDHCP_VERSION "\n");
                     return 0;
                     break;
@@ -537,6 +549,17 @@ int main(int argc, char **argv)
 
                 case 'r':
                     retries = min(5, max(1, atoi(optarg)));
+                    break;
+
+                case 'R':
+                    extra = strdup(optarg);
+                    if (strlen(extra) < 2 || extra[0] != '{' || extra[strlen(extra) - 1] != '}')
+                    {
+                        log_message(LOG_CRIT, "invalid request specification %s - aborting", extra);
+                        exit(1);
+                    }
+                    extra[strlen(extra) - 1] = 0;
+                    memmove(extra, extra + 1, strlen(extra));
                     break;
 
                 case 'b':
