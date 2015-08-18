@@ -16,7 +16,7 @@ env PIDFILE=/var/run/pdhcp.pid
 pre-start script
   export PDHCP_STATE=start
   [ -s /etc/default/$NAME ] && . /etc/default/$NAME
-  [ -z "$ENABLED" ] && { stop; exit 0; }
+  [ $ENABLED -eq 0 ] && { stop; exit 0; }
   [ ! -x "$DAEMON" ] && { stop; exit 0; }
   mkdir -p `dirname $PIDFILE`
   exit 0
