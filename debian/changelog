@@ -1,3 +1,9 @@
+pdhcp (1.0.3) stable; urgency=medium
+
+  * fix off-by-(f*cking-)1 error
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Mon, 24 Aug 2015 16:38:24 +0200
+
 pdhcp (1.0.2) stable; urgency=medium
 
   * add reqspec support in client mode

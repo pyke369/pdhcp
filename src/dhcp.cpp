@@ -975,7 +975,7 @@ bool dhcp_encode(char *input, DHCP_FRAME *frame, ssize_t *frame_size, char *erro
     {
         frame->xid = lrand48();
     }
-    frame->options[*frame_size] = 255;
+    frame->options[(*frame_size)++] = 255;
     *frame_size += offsetof(DHCP_FRAME, options);
     *frame_size  = max(300, *frame_size);
     memcpy(frame->key, frame->chaddr, ETH_ALEN);

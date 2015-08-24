@@ -27,7 +27,7 @@
 #include <dhcp.h>
 
 // defines
-#define  PDHCP_VERSION                 "1.0.2"
+#define  PDHCP_VERSION                 "1.0.3"
 #define  PDHCP_MAX_WORKERS             (32)
 #define  PDHCP_DEFAULT_PIDFILE         ("/var/run/pdhcp.pid")
 #define  PDHCP_DEFAULT_ADDRESS         ("0.0.0.0")
