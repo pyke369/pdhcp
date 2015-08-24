@@ -1,3 +1,9 @@
+pdhcp (1.0.4) stable; urgency=medium
+
+  * fix two DHCP options definition
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Mon, 24 Aug 2015 17:26:42 +0200
+
 pdhcp (1.0.3) stable; urgency=medium
 
   * fix off-by-(f*cking-)1 error

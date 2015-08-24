@@ -27,7 +27,7 @@
 #include <dhcp.h>
 
 // defines
-#define  PDHCP_VERSION                 "1.0.3"
+#define  PDHCP_VERSION                 "1.0.4"
 #define  PDHCP_MAX_WORKERS             (32)
 #define  PDHCP_DEFAULT_PIDFILE         ("/var/run/pdhcp.pid")
 #define  PDHCP_DEFAULT_ADDRESS         ("0.0.0.0")
@@ -262,13 +262,13 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
                     if (ntohs(udp_header->dest) == PDHCP_DEFAULT_CLIENT_PORT)
                     {
                         frame = (DHCP_FRAME *)(packet + sizeof(struct ether_header) + (ip_header->ihl * sizeof(uint32_t)) + sizeof(udphdr));
+                        frame->remote.sin_addr.s_addr = ip_header->saddr;
                         if (dhcp_decode(frame, ntohs(udp_header->len) - sizeof(struct udphdr), output, sizeof(output), message, sizeof(message)))
                         {
                             if (frame->op == DHCP_FRAME_BOOTREPLY && frame->dhcp_type == DHCP_TYPE_OFFER && frame->xid == xid && !memcmp(frame->chaddr, get_mac_address(interface, true), ETH_ALEN))
                             {
                                 if (verbose)
                                 {
-                                    frame->remote.sin_addr.s_addr = ip_header->saddr;
                                     log_message(LOG_INFO, "dhcp-offer received from %s:%d for %02x:%02x:%02x:%02x:%02x:%02x/%08x",
                                                 inet_ntoa(frame->remote.sin_addr), ntohs(udp_header->source),
                                                 frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5], ntohl(frame->xid));
@@ -276,6 +276,10 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
                                 printf("%s\n", output);
                                 exit(0);
                             }
+                        }
+                        else if (verbose)
+                        {
+                            log_message(LOG_WARNING, "invalid DHCP frame received from %s:%d: %s", inet_ntoa(frame->remote.sin_addr), ntohs(udp_header->source), message);
                         }
                     }
                 }
@@ -361,7 +365,7 @@ void tick_handler(struct ev_loop *loop, struct ev_timer *watcher, int events)
     {
         if (!retries)
         {
-            log_message(LOG_WARNING, "no response from DHCP server - exiting");
+            log_message(LOG_WARNING, "no valid response from DHCP server - exiting");
             exit(1);
         }
 
