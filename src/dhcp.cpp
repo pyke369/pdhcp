@@ -751,7 +751,7 @@ bool dhcp_encode(char *input, DHCP_FRAME *frame, ssize_t *frame_size, char *erro
                         frame->options[(*frame_size)++] = nvalue[0] / 2;
                         for (index = 0; index < nvalue[0]; index += 2)
                         {
-                            if (sscanf(ltoken + index, "%02x", &nvalue[1]) != 1)
+                            if (!isxdigit(*(ltoken + index)) || !isxdigit(*(ltoken + index + 1)) || sscanf(ltoken + index, "%02x", &nvalue[1]) != 1)
                             {
                                 if (error) snprintf(error, error_size, "invalid hexstring format \"%s\"", ltoken);
                                 return false;
