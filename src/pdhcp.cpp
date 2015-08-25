@@ -27,7 +27,7 @@
 #include <dhcp.h>
 
 // defines
-#define  PDHCP_VERSION                 "1.0.4"
+#define  PDHCP_VERSION                 "1.0.5"
 #define  PDHCP_MAX_WORKERS             (32)
 #define  PDHCP_DEFAULT_PIDFILE         ("/var/run/pdhcp.pid")
 #define  PDHCP_DEFAULT_ADDRESS         ("0.0.0.0")
@@ -202,6 +202,14 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
         {
             if (dhcp_decode(frame, size, output, sizeof(output), message, sizeof(message)) && frame->op == DHCP_FRAME_BOOTREQUEST)
             {
+                if (requests.find(frame->key) != requests.end())
+                {
+                    log_message(LOG_WARNING, "duplicate dhcp-%s received from %s:%d for %02x:%02x:%02x:%02x:%02x:%02x/%08x",
+                                dhcp_messages_types[frame->dhcp_type], inet_ntoa(frame->remote.sin_addr), ntohs(frame->remote.sin_port),
+                                frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
+                                ntohl(frame->xid));
+                    return;
+                }
                 log_message(LOG_INFO, "dhcp-%s received from %s:%d for %02x:%02x:%02x:%02x:%02x:%02x/%08x",
                             dhcp_messages_types[frame->dhcp_type], inet_ntoa(frame->remote.sin_addr), ntohs(frame->remote.sin_port),
                             frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
