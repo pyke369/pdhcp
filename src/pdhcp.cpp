@@ -11,6 +11,7 @@
 #include <libgen.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/if_ether.h>
@@ -20,6 +21,7 @@
 #include <netinet/udp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <queue>
 #include <unordered_map>
 
 #include <ev.h>
@@ -36,12 +38,14 @@
 #define  PDHCP_DEFAULT_CLIENT_RETRIES  (3)
 
 // structures and typedefs
+typedef  std::deque<char *>  WORKER_QUEUE;
 typedef struct
 {
-    ev_io  stdout_watcher, stderr_watcher;
-    int    stdin, stdout, stderr;
-    time_t active;
-    pid_t  pid;
+    WORKER_QUEUE *queue;
+    ev_io        stdin_watcher, stdout_watcher, stderr_watcher;
+    int          stdin, stdout, stderr;
+    time_t       active;
+    pid_t        pid;
 } PDHCP_WORKER;
 
 struct hrq
@@ -84,12 +88,33 @@ uint32_t       xid = 0;
 int            workers_count = 1, retries = 3, service = -1, verbose = false;
 char           *pidfile = NULL, *address = NULL, *port = NULL, *interface = NULL, *backend = NULL, *user = NULL, *group = NULL, *extra = NULL;
 
+// worker stdin handler
+void worker_stdin_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
+{
+    PDHCP_WORKER *worker = (PDHCP_WORKER *)watcher->data;
+    char         *request;
+
+    if (worker->queue->empty())
+    {
+        ev_io_stop(loop, &(worker->stdin_watcher));
+        return;
+    }
+    request = (char *)worker->queue->front();
+    if (write(worker->stdin, request, strlen(request)) != (ssize_t)strlen(request) && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+    {
+        return;
+    }
+    SFREE(request);
+    worker->queue->pop_front();
+}
+
 // worker stdout handler
 void worker_stdout_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
 {
     PDHCP_WORKER      *worker = (PDHCP_WORKER *)watcher->data;
     DHCP_FRAME        frame;
     PDHCP_REQUESTS_IT request;
+    struct timeval    now;
     ssize_t           size;
     char              received[BUFSIZ], message[256], *token;
 
@@ -110,10 +135,6 @@ void worker_stdout_handler(struct ev_loop *loop, struct ev_io *watcher, int even
                 worker->active = time(NULL);
                 if (size)
                 {
-                    log_message(LOG_INFO, "dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x received from backend worker %d",
-                                dhcp_messages_types[frame.dhcp_type],
-                                frame.chaddr[0], frame.chaddr[1], frame.chaddr[2], frame.chaddr[3], frame.chaddr[4], frame.chaddr[5],
-                                ntohl(frame.xid), workers->pid);
                     if ((request = requests.find(frame.key)) == requests.end())
                     {
                         log_message(LOG_WARNING, "no matching pending request for %02x:%02x:%02x:%02x:%02x:%02x/%08x, ignoring response from backend worker %d",
@@ -121,6 +142,12 @@ void worker_stdout_handler(struct ev_loop *loop, struct ev_io *watcher, int even
                                     ntohl(frame.xid), workers->pid);
                         return;
                     }
+                    gettimeofday(&now, NULL);
+                    log_message(LOG_INFO, "dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x received from backend worker %d in %.2fms",
+                                dhcp_messages_types[frame.dhcp_type],
+                                frame.chaddr[0], frame.chaddr[1], frame.chaddr[2], frame.chaddr[3], frame.chaddr[4], frame.chaddr[5],
+                                ntohl(frame.xid), workers->pid,
+                                (((double)now.tv_sec + ((double)now.tv_usec / 1000000)) - request->second->start) * 1000);
                     if (frame.giaddr)
                     {
                         request->second->remote.sin_addr.s_addr = frame.giaddr;
@@ -188,12 +215,12 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
     DHCP_FRAME         *frame, *mframe;
     socklen_t          ssize;
     ssize_t            size;
-    time_t             now;
+    struct timeval     now;
     int                index, count = 0, target;
     uint8_t            packet[BUFSIZ];
     char               output[BUFSIZ], message[256];
 
-    now   = time(NULL);
+    gettimeofday(&now, NULL);
     ssize = sizeof(frame->remote);
     frame = (DHCP_FRAME *)packet;
     if ((size = recvfrom(service, packet, sizeof(packet), 0, (struct sockaddr *)&frame->remote, &ssize)) > 0)
@@ -217,10 +244,11 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
                 if ((mframe = (DHCP_FRAME *)malloc(sizeof(DHCP_FRAME))))
                 {
                     memcpy(mframe, frame, sizeof(DHCP_FRAME));
+                    mframe->start = (double)now.tv_sec + ((double)now.tv_usec / 1000000);
                     requests[mframe->key] = mframe;
                     for (index = 0; index < PDHCP_MAX_WORKERS; index ++)
                     {
-                        if (workers[index].pid && workers[index].active >= (now - 5)) count ++;
+                        if (workers[index].pid && workers[index].active >= (now.tv_sec - 5)) count ++;
                     }
                     if (!count)
                     {
@@ -230,17 +258,29 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
                     target = frame->chaddr[5] % count;
                     for (index = 0; index < PDHCP_MAX_WORKERS; index ++)
                     {
-                        if (workers[index].pid && workers[index].active >= (now - 5))
+                        if (workers[index].pid && workers[index].active >= (now.tv_sec - 5))
                         {
                             if (!target)
                             {
                                 strcat(output, "\n");
-                                if (write(workers[index].stdin, output, strlen(output)) == (ssize_t)strlen(output))
+                                if (write(workers[index].stdin, output, strlen(output)) == (ssize_t)strlen(output) || (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
                                 {
+                                    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+                                    {
+                                        workers[index].queue->push_back(strdup(output));
+                                        ev_io_start(loop, &(workers[index].stdin_watcher));
+                                    }
                                     log_message(LOG_INFO, "dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x forwarded to backend worker %d",
                                                 dhcp_messages_types[frame->dhcp_type],
                                                 frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
                                                 ntohl(frame->xid), workers[index].pid);
+                                }
+                                else
+                                {
+                                    log_message(LOG_WARNING, "error forwarding dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x to backend worker %d: %s",
+                                                dhcp_messages_types[frame->dhcp_type],
+                                                frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
+                                                ntohl(frame->xid), workers[index].pid, strerror(errno));
                                 }
                                 break;
                             }
@@ -342,6 +382,8 @@ void tick_handler(struct ev_loop *loop, struct ev_timer *watcher, int events)
             }
             if (worker && (worker->pid = exec_command(backend, user, group, &(worker->stdin), &(worker->stdout), &(worker->stderr))))
             {
+                ev_io_init(&(worker->stdin_watcher), worker_stdin_handler, worker->stdin, EV_WRITE);
+                worker->stdin_watcher.data = worker;
                 ev_io_init(&(worker->stdout_watcher), worker_stdout_handler, worker->stdout, EV_READ);
                 worker->stdout_watcher.data = worker;
                 ev_io_start(loop, &(worker->stdout_watcher));
@@ -660,8 +702,13 @@ int main(int argc, char **argv)
     // start main event loop
     {
         char message[BUFSIZ] = "";
+        int  index;
 
         memset(workers, 0, sizeof(workers));
+        for (index = 0; index < PDHCP_MAX_WORKERS; index ++)
+        {
+            workers->queue = new WORKER_QUEUE;
+        }
         srand48(time(NULL) + getpid());
         if (interface)
         {

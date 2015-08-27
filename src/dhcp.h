@@ -52,6 +52,7 @@ typedef struct
     uint8_t   dhcp_type;
     struct    sockaddr_in remote;
     uint8_t   key[11];
+    double    start;
     time_t    expire;
 } DHCP_FRAME;
 #pragma  pack(pop)

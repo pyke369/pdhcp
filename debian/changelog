@@ -1,3 +1,10 @@
+pdhcp (1.0.6) stable; urgency=medium
+
+  * log matched responses time
+  * make sure all backend requests are queued and retried (if backend workers get slow)
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Thu, 27 Aug 2015 19:14:29 +0200
+
 pdhcp (1.0.5) stable; urgency=medium
 
   * drop duplicate requests in server mode (and do not even forward them to backend workers)
