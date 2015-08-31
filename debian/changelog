@@ -1,3 +1,9 @@
+pdhcp (1.0.7) stable; urgency=medium
+
+  * do not log own responses in broadcast reply mode
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Mon, 31 Aug 2015 18:24:48 +0200
+
 pdhcp (1.0.6) stable; urgency=medium
 
   * log matched responses time

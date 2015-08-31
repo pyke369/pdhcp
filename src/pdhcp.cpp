@@ -146,13 +146,13 @@ void worker_stdout_handler(struct ev_loop *loop, struct ev_io *watcher, int even
                     log_message(LOG_INFO, "dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x received from backend worker %d in %.2fms",
                                 dhcp_messages_types[frame.dhcp_type],
                                 frame.chaddr[0], frame.chaddr[1], frame.chaddr[2], frame.chaddr[3], frame.chaddr[4], frame.chaddr[5],
-                                ntohl(frame.xid), workers->pid,
+                                ntohl(frame.xid), worker->pid,
                                 (((double)now.tv_sec + ((double)now.tv_usec / 1000000)) - request->second->start) * 1000);
                     if (frame.giaddr)
                     {
                         request->second->remote.sin_addr.s_addr = frame.giaddr;
                     }
-                    else
+                    else if (!request->second->remote.sin_addr.s_addr)
                     {
                         request->second->remote.sin_addr.s_addr = INADDR_BROADCAST;
                     }
@@ -227,7 +227,11 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
     {
         if (backend)
         {
-            if (dhcp_decode(frame, size, output, sizeof(output), message, sizeof(message)) && frame->op == DHCP_FRAME_BOOTREQUEST)
+            if (frame->op == DHCP_FRAME_BOOTREQUEST)
+            {
+                return;
+            }
+            if (dhcp_decode(frame, size, output, sizeof(output), message, sizeof(message)))
             {
                 if (requests.find(frame->key) != requests.end())
                 {
@@ -255,7 +259,7 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
                         log_message(LOG_ERR, "no available backend worker to process request");
                         return;
                     }
-                    target = frame->chaddr[5] % count;
+                    target = frame->chaddr[4] % count;
                     for (index = 0; index < PDHCP_MAX_WORKERS; index ++)
                     {
                         if (workers[index].pid && workers[index].active >= (now.tv_sec - 5))
@@ -354,6 +358,7 @@ void tick_handler(struct ev_loop *loop, struct ev_timer *watcher, int events)
             {
                 if (workers[index1].pid == pid)
                 {
+                    ev_io_stop(loop, &(workers[index1].stdin_watcher));
                     ev_io_stop(loop, &(workers[index1].stdout_watcher));
                     ev_io_stop(loop, &(workers[index1].stderr_watcher));
                     close(workers[index1].stdin);

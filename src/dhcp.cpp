@@ -396,7 +396,6 @@ bool dhcp_decode(DHCP_FRAME *frame, ssize_t frame_size, char *output, ssize_t ou
         return false;
     }
     if (frame->op != DHCP_FRAME_BOOTREQUEST && frame->op != DHCP_FRAME_BOOTREPLY)
-
     {
         if (error) snprintf(error, error_size, "invalid BOOTP operation %d", frame->op);
         return false;

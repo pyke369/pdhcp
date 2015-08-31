@@ -23,7 +23,7 @@ while True:
                    'bootp-transaction-id':    request.get('bootp-transaction-id', ''),
                    'server-identifier':       '192.168.37.128',
                    'hostname':                'server',
-                   'bootp-assigned-address':  '192.168.37.192',
+                   'bootp-assigned-address':  request.get('bootp-client-address', '192.168.37.192'),
                    'subnet-mask':             '255.255.255.0',
                    'routers':                 [ '192.168.37.2' ],
                    'domain-name-servers':     [ '192.168.37.2' ],
