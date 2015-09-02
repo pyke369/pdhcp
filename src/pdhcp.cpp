@@ -29,7 +29,7 @@
 #include <dhcp.h>
 
 // defines
-#define  PDHCP_VERSION                 "1.0.5"
+#define  PDHCP_VERSION                 "1.0.8"
 #define  PDHCP_MAX_WORKERS             (32)
 #define  PDHCP_DEFAULT_PIDFILE         ("/var/run/pdhcp.pid")
 #define  PDHCP_DEFAULT_ADDRESS         ("0.0.0.0")
@@ -85,7 +85,7 @@ ev_io          service_watcher;
 ev_timer       tick_watcher;
 time_t         next = 0, delta = 2;
 uint32_t       xid = 0;
-int            workers_count = 1, retries = 3, service = -1, verbose = false;
+int            workers_count = 1, retries = 3, service = -1, verbose = false, nolocal = false;
 char           *pidfile = NULL, *address = NULL, *port = NULL, *interface = NULL, *backend = NULL, *user = NULL, *group = NULL, *extra = NULL;
 
 // worker stdin handler
@@ -227,7 +227,7 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
     {
         if (backend)
         {
-            if (frame->op != DHCP_FRAME_BOOTREQUEST)
+            if (frame->op != DHCP_FRAME_BOOTREQUEST || (nolocal && !frame->giaddr))
             {
                 return;
             }
@@ -537,6 +537,7 @@ int main(int argc, char **argv)
             {"version",     0, NULL, 'V'},
             {"verbose",     0, NULL, 'v'},
             {"listkeys",    0, NULL, 'l'},
+            {"nolocal",     0, NULL, 'L'},
             {"port",        1, NULL, 'p'},
             {"address",     1, NULL, 'a'},
             {"interface",   1, NULL, 'i'},
@@ -549,7 +550,7 @@ int main(int argc, char **argv)
             {"pidfile",     1, NULL, 'z'},
             {NULL,          0, NULL,  0 }
         };
-        while ((option = getopt_long(argc, argv, "hVvlp:a:i:r:R:b:c:n:f:z:", options, NULL)) != -1)
+        while ((option = getopt_long(argc, argv, "hVvlLp:a:i:r:R:b:c:n:f:z:", options, NULL)) != -1)
         {
             switch (option)
             {
@@ -562,6 +563,7 @@ int main(int argc, char **argv)
                         "-V, --version                     display program version and exit\n"
                         "-v, --verbose                     \n"
                         "-l, --listkeys                    list all keys useable in the communication protocol with workers\n"
+                        "-L, --nolocal                     ignore locally broadcasted DHCP requests (only accept requests from relays)\n"
                         "-p, --port <port>                 use specified server UDP port (default: %s)\n"
                         "-a, --address <address>           use specified server address (default: %s)\n"
                         "-i, --interface <name>            use specified interface (default: first available)\n"
@@ -592,6 +594,10 @@ int main(int argc, char **argv)
                 case 'l':
                     dhcp_listkeys(stdout);
                     return 0;
+                    break;
+
+                case 'L':
+                    nolocal = true;
                     break;
 
                 case 'p':
