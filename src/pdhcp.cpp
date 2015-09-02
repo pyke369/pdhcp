@@ -227,7 +227,7 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
     {
         if (backend)
         {
-            if (frame->op == DHCP_FRAME_BOOTREQUEST)
+            if (frame->op != DHCP_FRAME_BOOTREQUEST)
             {
                 return;
             }
