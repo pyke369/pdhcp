@@ -29,7 +29,7 @@
 #include <dhcp.h>
 
 // defines
-#define  PDHCP_VERSION                 "1.0.8"
+#define  PDHCP_VERSION                 "1.1.0"
 #define  PDHCP_MAX_WORKERS             (32)
 #define  PDHCP_DEFAULT_PIDFILE         ("/var/run/pdhcp.pid")
 #define  PDHCP_DEFAULT_ADDRESS         ("0.0.0.0")
@@ -148,6 +148,10 @@ void worker_stdout_handler(struct ev_loop *loop, struct ev_io *watcher, int even
                                 frame.chaddr[0], frame.chaddr[1], frame.chaddr[2], frame.chaddr[3], frame.chaddr[4], frame.chaddr[5],
                                 ntohl(frame.xid), worker->pid,
                                 (((double)now.tv_sec + ((double)now.tv_usec / 1000000)) - request->second->start) * 1000);
+                    if (request->second->giaddr)
+                    {
+                        frame.giaddr = request->second->giaddr;
+                    }
                     if (frame.giaddr)
                     {
                         request->second->remote.sin_addr.s_addr = frame.giaddr;
