@@ -188,7 +188,7 @@ static DHCP_OPTION dhcp_options[] =
     { false,   91,                           { 1,   4,   4,   0 },  DHCP_OPTION_INTEGER,                         "last-transaction-time" },
     { false,   92,                           { 1,   4,   0,   4 },  DHCP_OPTION_ADDRESS | DHCP_OPTION_LIST,      "associated-addresses" },
     { false,   93,                           { 1,   2,   2,   0 },  DHCP_OPTION_INTEGER,                         "client-system" },
-    { false,   94,                           { 1,   3,   3,   0 },  DHCP_OPTION_OPAQUE,                          "cliend-ndi" },
+    { false,   94,                           { 1,   3,   3,   0 },  DHCP_OPTION_OPAQUE,                          "client-ndi" },
     { false,   97,                           { 1,   1,   0,   0 },  DHCP_OPTION_OPAQUE,                          "client-guid" },
     { false,   98,                           { 1,   1,   0,   0 },  DHCP_OPTION_STRING,                          "user-authentication" },
     { false,   99,                           { 1,   1,   0,   0 },  DHCP_OPTION_OPAQUE,                          "geoconf-civic" },
