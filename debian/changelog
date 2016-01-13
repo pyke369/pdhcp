@@ -1,3 +1,9 @@
+pdhcp (1.1.1) stable; urgency=medium
+
+  * add support for unknown (undefined) options in DHCP response
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Wed, 13 Jan 2016 17:22:59 +0100
+
 pdhcp (1.1.0) stable; urgency=medium
 
   * auto-enforce RFC2131 / 4.3.1 / table 3, so that backends don't have to

@@ -263,7 +263,8 @@ static DHCP_OPTION dhcp_options[] =
     { false,  253,                           { 1,   1,   0,   0 },  DHCP_OPTION_OPAQUE,                          "private-30" },
     { false,  254,                           { 1,   1,   0,   0 },  DHCP_OPTION_OPAQUE,                          "private-31" },
     { false,  255,                           { 0,   0,   0,   0 },  DHCP_OPTION_NONE,                            "end" },
-};
+},
+dhcp_unknown_option = { false, 0,  { 0, 0, 0, 0 }, DHCP_OPTION_OPAQUE, "" };
 
 // list all interpreted keys in JSON payload
 void dhcp_listkeys(FILE *output)
@@ -589,6 +590,13 @@ bool dhcp_encode(char *input, DHCP_FRAME *frame, ssize_t *frame_size, char *erro
                 break;
             }
             index ++;
+        }
+        if (!option && nkey)
+        {
+            option = &dhcp_unknown_option;
+            option->used = false;
+            option->code = nkey;
+            sprintf(option->key, "%d", nkey);
         }
         if (!option)
         {
@@ -931,8 +939,15 @@ bool dhcp_encode(char *input, DHCP_FRAME *frame, ssize_t *frame_size, char *erro
                     }
 		    if (dhcp_options[index].code == 255)
                     {
-                        if (error) snprintf(error, error_size, "unknown DHCP option \"%s\"", ltoken);
-                        return false;
+                        if (nvalue[0])
+                        {
+                            frame->options[(*frame_size)++] = nvalue[0];
+                        }
+                        else
+                        {
+                            if (error) snprintf(error, error_size, "unknown DHCP option \"%s\"", ltoken);
+                            return false;
+                        }
                     }
                     break;
 
