@@ -1,3 +1,9 @@
+pdhcp (1.1.2) stable; urgency=medium
+
+  * copy the DHCP request "flags" member in the DHCP response when responding to a DHCP relay
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Thu, 05 Jan 2017 11:43:29 +0100
+
 pdhcp (1.1.1) stable; urgency=medium
 
   * add support for unknown (undefined) options in DHCP response

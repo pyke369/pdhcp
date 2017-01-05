@@ -4,7 +4,7 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 INCLUDE(ExternalProject)
 INCLUDE_DIRECTORIES(BEFORE ${CMAKE_BINARY_DIR}/include ${CMAKE_SOURCE_DIR}/src)
-ADD_DEFINITIONS(-std=c++0x -fno-strict-aliasing -Wall -Werror -pedantic -Wno-write-strings)
+ADD_DEFINITIONS(-std=c++0x -fno-strict-aliasing -Wall -Werror -Wno-write-strings)
 LINK_DIRECTORIES(${CMAKE_BINARY_DIR}/lib)
 SET(BUILD_SHARED_LIBRARIES OFF)
 SET(CMAKE_EXE_LINKER_FLAGS "-static")

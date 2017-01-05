@@ -155,6 +155,7 @@ void worker_stdout_handler(struct ev_loop *loop, struct ev_io *watcher, int even
                     if (frame.giaddr)
                     {
                         request->second->remote.sin_addr.s_addr = frame.giaddr;
+                        frame.flags                             = request->second->flags;
                     }
                     else if (!request->second->remote.sin_addr.s_addr)
                     {
