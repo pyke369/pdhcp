@@ -1,37 +1,8 @@
 #!/usr/bin/make -f
 
-build: build-stamp
+DPKG_EXPORT_BUILDFLAGS=1
+include /usr/share/dpkg/default.mk
+DEB_BUILD_OPTIONS=nostrip
 
-build-stamp:
-	dh_testdir
-	$(MAKE)
-	touch build-stamp
-
-clean:
-	dh_testdir
-	dh_testroot
-	rm -f build-stamp
-	$(MAKE) clean
-	dh_clean
-
-install: build
-	dh_testdir
-	dh_prep
-	dh_install build/pdhcp /usr/bin
-	dh_install vendor/backend-example.py /usr/share/pdhcp
-
-binary-indep: build install
-
-binary-arch: build install
-	dh_testdir
-	dh_testroot
-	dh_installinit
-	dh_installcron
-	dh_fixperms
-	dh_installdeb
-	dh_gencontrol
-	dh_md5sums
-	dh_builddeb
-
-binary: binary-indep binary-arch
-.PHONY: build clean binary-indep binary-arch binary install
+%:
+	dh $@ --with systemd

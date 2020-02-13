@@ -1,6 +1,3 @@
-// This file is part of pdhcp
-// Copyright (c) 2015 Pierre-Yves Kerembellec <py.kerembellec@gmail.com>
-
 #ifndef __DHCP_INCLUDE
 #define __DHCP_INCLUDE
 
@@ -60,6 +57,7 @@ typedef struct
 // function prototypes
 extern char *dhcp_messages_types[];
 void   dhcp_listkeys(FILE *);
+void   dhcp_setkey(DHCP_FRAME *);
 bool   dhcp_decode(DHCP_FRAME *, ssize_t, char *, ssize_t, char *, size_t);
 bool   dhcp_encode(char *, DHCP_FRAME *, ssize_t *, char *, size_t);
 

@@ -1,6 +1,3 @@
-# This file is part of pdhcp
-# Copyright (c) 2014-2015 Pierre-Yves Kerembellec <py.kerembellec@gmail.com>
-
 pdhcp:
 	@mkdir -p build && \
 	cd build && \
@@ -10,6 +7,9 @@ pdhcp:
 
 server: pdhcp
 	./build/pdhcp -b vendor/backend-example.py -n 4
+
+relay: pdhcp
+	./build/pdhcp -i eth0 -F 1.2.3.4 -s 4.3.2.1
 
 client: pdhcp
 	./build/pdhcp -v -i eth0 | python -mjson.tool
@@ -24,3 +24,4 @@ distclean:
 
 debclean:
 	@debuild clean
+	@rm -f ../pdhcp_*

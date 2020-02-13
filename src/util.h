@@ -1,6 +1,3 @@
-// This file is part of pdhcp
-// Copyright (c) 2015 Pierre-Yves Kerembellec <py.kerembellec@gmail.com>
-
 #ifndef __UTIL_INCLUDE
 #define __UTIL_INCLUDE
 

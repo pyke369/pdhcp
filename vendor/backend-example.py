@@ -32,6 +32,9 @@ while True:
                    'bootp-server-address':    '192.168.37.128',
                    'bootp-filename':          'pxelinux.0'
                 }
+                relay = request.get('bootp-relay-address', '')
+                if relay != '':
+                    reponse['bootp-relay-address'] = relay
                 sys.stderr.write('--- sent response ---\n' + json.dumps(response, indent = 4))
                 sys.stdout.write(json.dumps(response) + '\n')
                 sys.stdout.flush()

@@ -1,6 +1,3 @@
-// This file is part of pdhcp
-// Copyright (c) 2015 Pierre-Yves Kerembellec <py.kerembellec@gmail.com>
-
 // mandatory includes
 #include <stdio.h>
 #include <string.h>

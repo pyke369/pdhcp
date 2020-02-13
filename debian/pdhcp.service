@@ -1,0 +1,14 @@
+[Unit]
+Description=pdhcp
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/default/pdhcp
+StandardOutput=null
+StandardError=journal
+ExecStart=/bin/sh -c "[ $ENABLED -ne 0 ] && /usr/bin/pdhcp $OPTIONS"
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

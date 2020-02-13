@@ -1,6 +1,3 @@
-// This file is part of pdhcp
-// Copyright (c) 2015 Pierre-Yves Kerembellec <py.kerembellec@gmail.com>
-
 // includes
 #include <string.h>
 #include <stdlib.h>
@@ -29,7 +26,7 @@
 #include <dhcp.h>
 
 // defines
-#define  PDHCP_VERSION                 "1.1.1"
+#define  PDHCP_VERSION                 "1.2.0"
 #define  PDHCP_MAX_WORKERS             (32)
 #define  PDHCP_DEFAULT_PIDFILE         ("/var/run/pdhcp.pid")
 #define  PDHCP_DEFAULT_ADDRESS         ("0.0.0.0")
@@ -80,13 +77,14 @@ struct udpcksum
 // globals
 PDHCP_WORKER   workers[PDHCP_MAX_WORKERS];
 PDHCP_REQUESTS requests;
+struct sockaddr_in raddress;
 struct ev_loop *loop;
 ev_io          service_watcher;
 ev_timer       tick_watcher;
 time_t         next = 0, delta = 2;
 uint32_t       xid = 0;
 int            workers_count = 1, retries = 3, service = -1, verbose = false, nolocal = false;
-char           *pidfile = NULL, *address = NULL, *port = NULL, *interface = NULL, *backend = NULL, *user = NULL, *group = NULL, *extra = NULL;
+char           *pidfile = NULL, *address = NULL, *port = NULL, *interface = NULL, *backend = NULL, *relay = NULL, *user = NULL, *group = NULL, *extra = NULL, *laddress = NULL;
 
 // worker stdin handler
 void worker_stdin_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
@@ -170,14 +168,6 @@ void worker_stdout_handler(struct ev_loop *loop, struct ev_io *watcher, int even
                         SFREE(request->second);
                         requests.erase(request);
                     }
-                    else
-                    {
-                        log_message(LOG_WARNING, "error sending dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x to %s:%d: %s",
-                                    dhcp_messages_types[frame.dhcp_type],
-                                    frame.chaddr[0], frame.chaddr[1], frame.chaddr[2], frame.chaddr[3], frame.chaddr[4], frame.chaddr[5],
-                                    ntohl(frame.xid), inet_ntoa(request->second->remote.sin_addr), ntohs(request->second->remote.sin_port),
-                                    strerror(errno));
-                    }
                 }
             }
             else
@@ -218,6 +208,7 @@ void worker_stderr_handler(struct ev_loop *loop, struct ev_io *watcher, int even
 void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
 {
     DHCP_FRAME         *frame, *mframe;
+    PDHCP_REQUESTS_IT  request;
     socklen_t          ssize;
     ssize_t            size;
     struct timeval     now;
@@ -284,13 +275,6 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
                                                 frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
                                                 ntohl(frame->xid), workers[index].pid);
                                 }
-                                else
-                                {
-                                    log_message(LOG_WARNING, "error forwarding dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x to backend worker %d: %s",
-                                                dhcp_messages_types[frame->dhcp_type],
-                                                frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
-                                                ntohl(frame->xid), workers[index].pid, strerror(errno));
-                                }
                                 break;
                             }
                             target --;
@@ -303,6 +287,87 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
                 log_message(LOG_WARNING, "invalid DHCP frame received from %s:%d: %s", inet_ntoa(frame->remote.sin_addr), ntohs(frame->remote.sin_port), message);
             }
         }
+
+        else if (relay)
+        {
+            if (dhcp_decode(frame, size, output, sizeof(output), message, sizeof(message)))
+            {
+                if (frame->remote.sin_addr.s_addr == raddress.sin_addr.s_addr)
+                {
+                    dhcp_setkey(frame);
+                    if ((request = requests.find(frame->key)) == requests.end())
+                    {
+                        log_message(LOG_WARNING, "no matching pending request for %02x:%02x:%02x:%02x:%02x:%02x/%08x, ignoring response from remote DHCP server %s:%d",
+                                    frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
+                                    ntohl(frame->xid), inet_ntoa(frame->remote.sin_addr), ntohs(frame->remote.sin_port));
+                        return;
+                    }
+                    gettimeofday(&now, NULL);
+                    log_message(LOG_INFO, "dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x received from remote DHCP server %s:%d in %.2fms",
+                                dhcp_messages_types[frame->dhcp_type],
+                                frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
+                                ntohl(frame->xid), inet_ntoa(frame->remote.sin_addr), ntohs(frame->remote.sin_port),
+                                (((double)now.tv_sec + ((double)now.tv_usec / 1000000)) - request->second->start) * 1000);
+                    frame->giaddr = 0;
+                    if (dhcp_decode(frame, size, output, sizeof(output), NULL, 0))
+                    {
+                        if (dhcp_encode(output, frame, &size, NULL, 0))
+                        {
+                            if (!request->second->remote.sin_addr.s_addr)
+                            {
+                                request->second->remote.sin_addr.s_addr = INADDR_BROADCAST;
+                            }
+                            if (sendto(service, (uint8_t *)frame, size, 0, (struct sockaddr *)&request->second->remote, sizeof(request->second->remote)) == size)
+                            {
+                                log_message(LOG_INFO, "dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x sent to %s:%d",
+                                            dhcp_messages_types[frame->dhcp_type],
+                                            frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
+                                            ntohl(frame->xid), inet_ntoa(request->second->remote.sin_addr), ntohs(request->second->remote.sin_port));
+                                SFREE(request->second);
+                                requests.erase(request);
+                            }
+                        }
+                    }
+                }
+                else if (!frame->giaddr)
+                {
+                    if (requests.find(frame->key) != requests.end())
+                    {
+                        log_message(LOG_WARNING, "duplicate dhcp-%s received from %s:%d for %02x:%02x:%02x:%02x:%02x:%02x/%08x",
+                                    dhcp_messages_types[frame->dhcp_type], inet_ntoa(frame->remote.sin_addr), ntohs(frame->remote.sin_port),
+                                    frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
+                                    ntohl(frame->xid));
+                        return;
+                    }
+                    log_message(LOG_INFO, "dhcp-%s received from %s:%d for %02x:%02x:%02x:%02x:%02x:%02x/%08x",
+                                dhcp_messages_types[frame->dhcp_type], inet_ntoa(frame->remote.sin_addr), ntohs(frame->remote.sin_port),
+                                frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
+                                ntohl(frame->xid));
+                    if ((mframe = (DHCP_FRAME *)malloc(sizeof(DHCP_FRAME))))
+                    {
+                        memcpy(mframe, frame, sizeof(DHCP_FRAME));
+                        mframe->start = (double)now.tv_sec + ((double)now.tv_usec / 1000000);
+                        requests[mframe->key] = mframe;
+                        snprintf(output + strlen(output) - 1, sizeof(output) - strlen(output) - 1, ",\"bootp-relay-address\":\"%s\"}", laddress);
+                        if (dhcp_encode(output, frame, &size, NULL, 0))
+                        {
+                            if (sendto(service, (uint8_t *)frame, size, 0, (struct sockaddr *)&raddress, sizeof(raddress)) == size)
+                            {
+                                log_message(LOG_INFO, "dhcp-%s for %02x:%02x:%02x:%02x:%02x:%02x/%08x forwarded to remote DHCP server %s:%d",
+                                            dhcp_messages_types[frame->dhcp_type],
+                                            frame->chaddr[0], frame->chaddr[1], frame->chaddr[2], frame->chaddr[3], frame->chaddr[4], frame->chaddr[5],
+                                            ntohl(frame->xid), inet_ntoa(raddress.sin_addr), ntohs(raddress.sin_port));
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                log_message(LOG_WARNING, "invalid DHCP frame received from %s:%d: %s", inet_ntoa(frame->remote.sin_addr), ntohs(frame->remote.sin_port), message);
+            }
+        }
+
         else
         {
             struct ether_header *eth_header;
@@ -320,7 +385,7 @@ void service_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
                     {
                         frame = (DHCP_FRAME *)(packet + sizeof(struct ether_header) + (ip_header->ihl * sizeof(uint32_t)) + sizeof(udphdr));
                         frame->remote.sin_addr.s_addr = ip_header->saddr;
-                        if (dhcp_decode(frame, ntohs(udp_header->len) - sizeof(struct udphdr), output, sizeof(output), message, sizeof(message)))
+                        if (dhcp_decode(frame, ntohs(udp_header->len) - sizeof(struct udphdr), output, sizeof(output), NULL, 0))
                         {
                             if (frame->op == DHCP_FRAME_BOOTREPLY && frame->dhcp_type == DHCP_TYPE_OFFER && frame->xid == xid && !memcmp(frame->chaddr, get_mac_address(interface, true), ETH_ALEN))
                             {
@@ -350,57 +415,60 @@ void tick_handler(struct ev_loop *loop, struct ev_timer *watcher, int events)
 {
     time_t now = time(NULL);
 
-    if (backend)
+    if (backend || relay )
     {
-        PDHCP_WORKER *worker = NULL;
-        pid_t        pid;
-        int          status, index1, index2, count = 0;
-
-        // reap exited workers
-        while ((pid = waitpid(-1, &status, WNOHANG)) > 0)
+        if (backend)
         {
-            for (index1 = 0; index1 < PDHCP_MAX_WORKERS; index1 ++)
+            PDHCP_WORKER *worker = NULL;
+            pid_t        pid;
+            int          status, index1, index2, count = 0;
+
+            // reap exited workers
+            while ((pid = waitpid(-1, &status, WNOHANG)) > 0)
             {
-                if (workers[index1].pid == pid)
+                for (index1 = 0; index1 < PDHCP_MAX_WORKERS; index1 ++)
                 {
-                    ev_io_stop(loop, &(workers[index1].stdin_watcher));
-                    ev_io_stop(loop, &(workers[index1].stdout_watcher));
-                    ev_io_stop(loop, &(workers[index1].stderr_watcher));
-                    close(workers[index1].stdin);
-                    close(workers[index1].stdout);
-                    close(workers[index1].stderr);
-                    memset(&(workers[index1]), 0, sizeof(PDHCP_WORKER));
+                    if (workers[index1].pid == pid)
+                    {
+                        ev_io_stop(loop, &(workers[index1].stdin_watcher));
+                        ev_io_stop(loop, &(workers[index1].stdout_watcher));
+                        ev_io_stop(loop, &(workers[index1].stderr_watcher));
+                        close(workers[index1].stdin);
+                        close(workers[index1].stdout);
+                        close(workers[index1].stderr);
+                        memset(&(workers[index1]), 0, sizeof(PDHCP_WORKER));
+                    }
                 }
             }
-        }
 
-        // start new workers if needed
-        for (index1 = 0; index1 < PDHCP_MAX_WORKERS; index1 ++)
-        {
-            if (workers[index1].pid) count ++;
-        }
-        for (index2 = count; index2 < workers_count; index2 ++)
-        {
-            worker = NULL;
+            // start new workers if needed
             for (index1 = 0; index1 < PDHCP_MAX_WORKERS; index1 ++)
             {
-                if (!workers[index1].pid)
-                {
-                    worker = &(workers[index1]);
-                    break;
-                }
+                if (workers[index1].pid) count ++;
             }
-            if (worker && (worker->pid = exec_command(backend, user, group, &(worker->stdin), &(worker->stdout), &(worker->stderr))))
+            for (index2 = count; index2 < workers_count; index2 ++)
             {
-                ev_io_init(&(worker->stdin_watcher), worker_stdin_handler, worker->stdin, EV_WRITE);
-                worker->stdin_watcher.data = worker;
-                ev_io_init(&(worker->stdout_watcher), worker_stdout_handler, worker->stdout, EV_READ);
-                worker->stdout_watcher.data = worker;
-                ev_io_start(loop, &(worker->stdout_watcher));
-                ev_io_init(&(worker->stderr_watcher), worker_stderr_handler, worker->stderr, EV_READ);
-                worker->stderr_watcher.data = worker;
-                ev_io_start(loop, &(worker->stderr_watcher));
-                log_message(LOG_INFO, "spawned backend worker %d", worker->pid);
+                worker = NULL;
+                for (index1 = 0; index1 < PDHCP_MAX_WORKERS; index1 ++)
+                {
+                    if (!workers[index1].pid)
+                    {
+                        worker = &(workers[index1]);
+                        break;
+                    }
+                }
+                if (worker && (worker->pid = exec_command(backend, user, group, &(worker->stdin), &(worker->stdout), &(worker->stderr))))
+                {
+                    ev_io_init(&(worker->stdin_watcher), worker_stdin_handler, worker->stdin, EV_WRITE);
+                    worker->stdin_watcher.data = worker;
+                    ev_io_init(&(worker->stdout_watcher), worker_stdout_handler, worker->stdout, EV_READ);
+                    worker->stdout_watcher.data = worker;
+                    ev_io_start(loop, &(worker->stdout_watcher));
+                    ev_io_init(&(worker->stderr_watcher), worker_stderr_handler, worker->stderr, EV_READ);
+                    worker->stderr_watcher.data = worker;
+                    ev_io_start(loop, &(worker->stderr_watcher));
+                    log_message(LOG_INFO, "spawned backend worker %d", worker->pid);
+                }
             }
         }
 
@@ -543,6 +611,8 @@ int main(int argc, char **argv)
             {"verbose",     0, NULL, 'v'},
             {"listkeys",    0, NULL, 'l'},
             {"nolocal",     0, NULL, 'L'},
+            {"relay",       1, NULL, 'F'},
+            {"source",      1, NULL, 's'},
             {"port",        1, NULL, 'p'},
             {"address",     1, NULL, 'a'},
             {"interface",   1, NULL, 'i'},
@@ -555,7 +625,7 @@ int main(int argc, char **argv)
             {"pidfile",     1, NULL, 'z'},
             {NULL,          0, NULL,  0 }
         };
-        while ((option = getopt_long(argc, argv, "hVvlLp:a:i:r:R:b:c:n:f:z:", options, NULL)) != -1)
+        while ((option = getopt_long(argc, argv, "hVvlLF:s:p:a:i:r:R:b:c:n:f:z:", options, NULL)) != -1)
         {
             switch (option)
             {
@@ -569,6 +639,8 @@ int main(int argc, char **argv)
                         "-v, --verbose                     \n"
                         "-l, --listkeys                    list all keys useable in the communication protocol with workers\n"
                         "-L, --nolocal                     ignore locally broadcasted DHCP requests (only accept requests from relays)\n"
+                        "-F, --relay <address>             relay requests to remote DHCP server\n"
+                        "-s, --source <address>            use specified address as relay source address\n"
                         "-p, --port <port>                 use specified server UDP port (default: %s)\n"
                         "-a, --address <address>           use specified server address (default: %s)\n"
                         "-i, --interface <name>            use specified interface (default: first available)\n"
@@ -603,6 +675,14 @@ int main(int argc, char **argv)
 
                 case 'L':
                     nolocal = true;
+                    break;
+
+                case 'F':
+                    relay = strdup(optarg);
+                    break;
+
+                case 's':
+                    laddress = strdup(optarg);
                     break;
 
                 case 'p':
@@ -670,7 +750,7 @@ int main(int argc, char **argv)
     pidfile = (backend ? (pidfile ? pidfile : strdup(PDHCP_DEFAULT_PIDFILE)) : pidfile);
     if (!backend && !interface)
     {
-        log_message(LOG_CRIT, "you need to specify an interface in client mode - aborting");
+        log_message(LOG_CRIT, "you need to specify an interface in client or relay modes - aborting");
         return 1;
     }
 
@@ -699,20 +779,43 @@ int main(int argc, char **argv)
     // create, configure and bind service socket (regular in server mode, raw in client mode)
     {
         struct addrinfo *addrinfo;
-        int             error = 0, option = 1;
+        int    error = 0, option = 1;
 
         if ((error = getaddrinfo(address, port, NULL, &addrinfo)) ||
-            (service = socket(backend ? AF_INET : AF_PACKET, backend ? SOCK_DGRAM : SOCK_RAW, backend ? IPPROTO_UDP : htons(ETH_P_IP))) < 0 ||
-            (interface && setsockopt(service, SOL_SOCKET, SO_BINDTODEVICE, interface, strlen(interface)) < 0) ||
+            (service = socket(backend || relay ? AF_INET : AF_PACKET, backend || relay ? SOCK_DGRAM : SOCK_RAW, backend || relay ? IPPROTO_UDP : htons(ETH_P_IP))) < 0 ||
+            (!relay && interface && setsockopt(service, SOL_SOCKET, SO_BINDTODEVICE, interface, strlen(interface)) < 0) ||
             setsockopt(service, SOL_SOCKET, SO_REUSEADDR, &option, sizeof(option)) < 0 ||
+            setsockopt(service, SOL_SOCKET, SO_REUSEPORT, &option, sizeof(option)) < 0 ||
             setsockopt(service, SOL_SOCKET, SO_BROADCAST, &option, sizeof(option)) < 0 ||
             !set_handle_blocking(service, false) ||
-            (backend && bind(service, (struct sockaddr *)addrinfo->ai_addr, sizeof(struct sockaddr_in)) < 0))
+            ((backend || relay) && bind(service, (struct sockaddr *)addrinfo->ai_addr, sizeof(struct sockaddr_in)) < 0))
         {
             log_message(LOG_CRIT, "cannot bind service socket [%s:%s]: %s - exiting", address, port, (error == 0 || error == EAI_SYSTEM ? strerror(errno) : gai_strerror(error)));
             return 1;
         }
         freeaddrinfo(addrinfo);
+
+        if (relay)
+        {
+            char *port = strdup(PDHCP_DEFAULT_SERVER_PORT), *token;
+
+            if ((token = strchr(relay, ':')))
+            {
+                *token = 0;
+                port = token + 1;
+            }
+            if ((error = getaddrinfo(relay, port, NULL, &addrinfo)))
+            {
+                log_message(LOG_CRIT, "cannot resolve relay address %s: %s - exiting", relay, (error == 0 || error == EAI_SYSTEM ? strerror(errno) : gai_strerror(error)));
+                return 1;
+            }
+            memcpy(&raddress, (struct sockaddr *)addrinfo->ai_addr, sizeof(struct sockaddr_in));
+            freeaddrinfo(addrinfo);
+            if (!laddress)
+            {
+                laddress = strdup((char *)get_ip_address(interface, false));
+            }
+        }
     }
 
     // start main event loop
@@ -730,9 +833,9 @@ int main(int argc, char **argv)
         {
             snprintf(message, sizeof(message), " on interface %s", interface);
         }
-        if (backend || verbose)
+        if (backend || relay || verbose)
         {
-            log_message(LOG_INFO, "starting pdhcp v%s in %s mode%s", PDHCP_VERSION, backend ? "server" : "client", message);
+            log_message(LOG_INFO, "starting pdhcp v%s in %s mode%s", PDHCP_VERSION, backend ? "server" : (relay ? "relay" : "client"), message);
         }
         loop = ev_loop_new(0);
         ev_io_init(&service_watcher, service_handler, service, EV_READ);

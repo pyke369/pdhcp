@@ -1,2 +1,7 @@
-.gitignore
 build
+build-stamp
+debian/pdhcp
+debian/*debhelper*
+debian/*substvars*
+debian/files
+_*

@@ -1,6 +1,3 @@
-// This file is part of pdhcp
-// Copyright (c) 2015 Pierre-Yves Kerembellec <py.kerembellec@gmail.com>
-
 // includes
 #include <string.h>
 #include <stdlib.h>
@@ -413,7 +410,7 @@ bool dhcp_decode(DHCP_FRAME *frame, ssize_t frame_size, char *output, ssize_t ou
     if (frame->ciaddr)   dhcp_decode_address("bootp-client-address", frame->ciaddr, 0, output, output_size);
     if (frame->yiaddr)   dhcp_decode_address("bootp-assigned-address", frame->yiaddr, 0, output, output_size);
     if (frame->siaddr)   dhcp_decode_address("bootp-server-address", frame->siaddr, 0, output, output_size);
-    if (frame->giaddr)   dhcp_decode_address("boot-relay-address", frame->giaddr, 0, output, output_size);
+    if (frame->giaddr)   dhcp_decode_address("bootp-relay-address", frame->giaddr, 0, output, output_size);
     if (frame->sname[0]) dhcp_decode_string("bootp-server-name", frame->sname, 0, output, output_size);
     if (frame->file[0])  dhcp_decode_string("bootp-filename", frame->file, 0, output, output_size);
     dhcp_decode_hexstring("client-hardware-address", frame->chaddr, ETH_ALEN, ":", output, output_size);
@@ -937,7 +934,7 @@ bool dhcp_encode(char *input, DHCP_FRAME *frame, ssize_t *frame_size, char *erro
                         }
                         index ++;
                     }
-		    if (dhcp_options[index].code == 255)
+                    if (dhcp_options[index].code == 255)
                     {
                         if (nvalue[0])
                         {
@@ -992,15 +989,7 @@ bool dhcp_encode(char *input, DHCP_FRAME *frame, ssize_t *frame_size, char *erro
     frame->options[(*frame_size)++] = 255;
     *frame_size += offsetof(DHCP_FRAME, options);
     *frame_size  = max(300, *frame_size);
-    memcpy(frame->key, frame->chaddr, ETH_ALEN);
-    memcpy(frame->key + ETH_ALEN, (uint8_t *)&(frame->xid), 4);
-    switch (frame->dhcp_type)
-    {
-        case DHCP_TYPE_OFFER: frame->key[10] = DHCP_TYPE_DISCOVER; break;
-        case DHCP_TYPE_ACK:   frame->key[10] = DHCP_TYPE_REQUEST; break;
-        case DHCP_TYPE_NAK:   frame->key[10] = DHCP_TYPE_REQUEST; break;
-        default:              frame->key[10] = frame->dhcp_type; break;
-    }
+    dhcp_setkey(frame);
     switch (frame->dhcp_type)
     {
         case DHCP_TYPE_DISCOVER:
@@ -1019,4 +1008,18 @@ bool dhcp_encode(char *input, DHCP_FRAME *frame, ssize_t *frame_size, char *erro
             break;
     }
     return true;
+}
+
+// compute and store frame unique key
+void dhcp_setkey(DHCP_FRAME *frame)
+{
+    memcpy(frame->key, frame->chaddr, ETH_ALEN);
+    memcpy(frame->key + ETH_ALEN, (uint8_t *)&(frame->xid), 4);
+    switch (frame->dhcp_type)
+    {
+        case DHCP_TYPE_OFFER: frame->key[10] = DHCP_TYPE_DISCOVER; break;
+        case DHCP_TYPE_ACK:   frame->key[10] = DHCP_TYPE_REQUEST; break;
+        case DHCP_TYPE_NAK:   frame->key[10] = DHCP_TYPE_REQUEST; break;
+        default:              frame->key[10] = frame->dhcp_type; break;
+    }
 }

@@ -1,3 +1,5 @@
+# pdhcp base configuration
+
 ENABLED=0
 PIDFILE="/var/run/pdhcp.pid"
-OPTIONS="--backend /usr/share/pdhcp/backend-example.py --workers 4"
+OPTIONS="--backend /usr/share/pdhcp/backend-example.py --workers 4 --nolocal"
