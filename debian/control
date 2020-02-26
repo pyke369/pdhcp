@@ -2,10 +2,10 @@ Source: pdhcp
 Section: net
 Priority: optional
 Maintainer: Pierre-Yves Kerembellec <py.kerembellec@gmail.com>
-Build-Depends: debhelper (>= 5), gcc, make, cmake (>= 2.8)
+Build-Depends: debhelper (>= 5), git-core, golang-1.13
 Standards-Version: 3.7.2
 
 Package: pdhcp
 Architecture: any
-Description: Programmable DHCP client/server
+Description: programmable BOOTP/DHCP client/server/relay
 

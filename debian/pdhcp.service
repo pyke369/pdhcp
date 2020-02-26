@@ -1,5 +1,5 @@
 [Unit]
-Description=pdhcp
+Description=programmable BOOTP/DHCP client/server/relay
 After=network.target
 
 [Service]

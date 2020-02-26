@@ -1,0 +1,23 @@
+bootp
+{
+    bootp-server-address = 192.168.40.1
+    bootp-filename       = undionly.kpxe
+
+    efi
+    {
+        match
+        {
+            client-system = 7
+        }
+        bootp-filename = ipxe.efi
+    }
+
+    ipxe
+    {
+        match
+        {
+            user-class = iPXE
+        }
+        bootp-filename = "http://192.168.40.1/ipxe.php?mac=${net0/mac}"
+    }
+}
