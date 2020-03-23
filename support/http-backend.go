@@ -113,15 +113,18 @@ func assign(input map[string]interface{}, request map[string]interface{}, key, v
 		case "drop":
 			delete(output, key)
 		case "lease":
-			if parts := strings.Split(matches[2], "|"); len(parts) == 2 {
-				if first := net.ParseIP(parts[0]); first != nil && first.To4() != nil {
-					if last := net.ParseIP(parts[1]); last != nil && last.To4() != nil {
-						duration, _ := strconv.Atoi(fmt.Sprintf("%v", input["address-lease-time"]))
-						if duration == 0 {
-							duration = 86400
-						}
-						if value := please(request, int64(duration), first.To4(), last.To4()); value != "" {
-							output[key] = value
+			for _, arange := range strings.Split(matches[2], "|") {
+				if parts := strings.Split(strings.TrimSpace(arange), "-"); len(parts) == 2 {
+					if first := net.ParseIP(strings.TrimSpace(parts[0])); first != nil && first.To4() != nil {
+						if last := net.ParseIP(strings.TrimSpace(parts[1])); last != nil && last.To4() != nil {
+							duration, _ := strconv.Atoi(fmt.Sprintf("%v", input["address-lease-time"]))
+							if duration == 0 {
+								duration = 86400
+							}
+							if value := please(request, int64(duration), first.To4(), last.To4()); value != "" {
+								output[key] = value
+								break
+							}
 						}
 					}
 				}
@@ -323,7 +326,7 @@ func main() {
 					ReadTimeout:  uconfig.Duration(config.GetDurationBounds("backend.read_timeout", 10, 5, 30)),
 					IdleTimeout:  uconfig.Duration(config.GetDurationBounds("backend.idle_timeout", 30, 5, 30)),
 					WriteTimeout: uconfig.Duration(config.GetDurationBounds("backend.write_timeout", 15, 5, 30)),
-					TLSConfig:    dynacert.ModernTLSConfig(loader.GetCertificate),
+					TLSConfig:    dynacert.IntermediateTLSConfig(loader.GetCertificate),
 					TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
 				}
 				go func(server *http.Server, parts []string) {
