@@ -1,3 +1,9 @@
+pdhcp (2.0.1) stable; urgency=medium
+
+  * reverse code logic in responses to relays
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Mon, 23 Mar 2020 17:20:19 +0100
+
 pdhcp (2.0.0) stable; urgency=medium
 
   * full rewrite in Golang

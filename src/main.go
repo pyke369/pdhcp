@@ -27,7 +27,7 @@ import (
 )
 
 const progname = "pdhcp"
-const version = "2.0.0"
+const version = "2.0.1"
 
 type SOURCE struct {
 	mode    string
@@ -489,13 +489,13 @@ func main() {
 						}
 						client := context.client
 						if address, port, err := net.SplitHostPort(context.client); err == nil {
-							if value, ok := context.data["bootp-relay-address"].(string); ok && value != "" {
-								client = fmt.Sprintf("%s:%s", value, port)
-								frame["bootp-relay-address"] = value
-							}
 							if value, ok := context.data["bootp-broadcast"].(bool); (ok && value) || net.ParseIP(address).Equal(net.IPv4zero) {
 								client = fmt.Sprintf("%s:%s", net.IPv4bcast, port)
 								frame["bootp-broadcast"] = value
+							}
+							if value, ok := context.data["bootp-relay-address"].(string); ok && value != "" {
+								client = fmt.Sprintf("%s:%s", value, port)
+								frame["bootp-relay-address"] = value
 							}
 						} else {
 							break
