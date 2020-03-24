@@ -27,7 +27,7 @@ import (
 )
 
 const progname = "pdhcp"
-const version = "2.0.1"
+const version = "2.0.2"
 
 type SOURCE struct {
 	mode    string
@@ -416,6 +416,10 @@ func main() {
 							}
 						} else if packet.source == "-" {
 							continue
+						} else if value, ok := frame["bootp-client-address"].(string); ok {
+							if host, _, err := net.SplitHostPort(packet.client); err == nil && value != host {
+								continue
+							}
 						}
 						if value, ok := frame["server-identifier"].(string); ok && sources[packet.source].rhandle != nil {
 							if value != sources[packet.source].rhandle.Local.Addr.String() {
@@ -424,11 +428,6 @@ func main() {
 						}
 						if value, ok := frame["client-hardware-address"].(string); ok && packet.hardware != "" && packet.hardware != value {
 							continue
-						}
-						if value, ok := frame["bootp-client-address"].(string); ok {
-							if host, _, err := net.SplitHostPort(packet.client); err == nil && value != host {
-								continue
-							}
 						}
 						lock.Lock()
 						if contexts[key] != nil {
