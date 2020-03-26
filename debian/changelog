@@ -1,3 +1,9 @@
+pdhcp (2.0.4) stable; urgency=medium
+
+  * do not start service by default _at all_
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Thu, 26 Mar 2020 14:53:57 +0100
+
 pdhcp (2.0.3) stable; urgency=medium
 
   * upgrade TLS profile to 2020-intermediate
