@@ -1,4 +1,4 @@
 github.com/pyke369/golang-support v0.0.0-20200321184731-cd1ed731523d h1:bssjYWDUaYbjtBc7gZ6BI3YBerIg5EAn+kAM5hMQf2s=
 github.com/pyke369/golang-support v0.0.0-20200321184731-cd1ed731523d/go.mod h1:0XGrzgrEp0fa/+JSV8XZePUwyjnU6C3bMc7Xz2bHHKI=
-golang.org/x/sys v0.0.0-20200321134203-328b4cd54aae h1:3tcmuaB7wwSZtelmiv479UjUB+vviwABz7a133ZwOKQ=
-golang.org/x/sys v0.0.0-20200321134203-328b4cd54aae/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+golang.org/x/sys v0.0.0-20200909081042-eff7692f9009 h1:W0lCpv29Hv0UaM1LXb9QlBHLNP8UFfcKjblhVCWftOM=
+golang.org/x/sys v0.0.0-20200909081042-eff7692f9009/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=

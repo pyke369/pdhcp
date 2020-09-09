@@ -27,7 +27,7 @@ import (
 )
 
 const progname = "pdhcp"
-const version = "2.0.4"
+const version = "2.0.5"
 
 type SOURCE struct {
 	mode    string

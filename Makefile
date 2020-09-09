@@ -15,7 +15,7 @@ distclean:
 deb:
 	@debuild -e GOROOT -e GOPATH -e PATH -i -us -uc -b
 debclean:
-	@debuild clean
+	@debuild -- clean
 	@rm -f ../pdhcp_*
 
 # run targets
@@ -24,7 +24,7 @@ client: pdhcp
 local-backend: pdhcp
 	@./pdhcp -i br0 -b support/local-backend.py -w 4
 remote-backend: pdhcp
-	@./pdhcp -i br0 -b http://localhost:8000/
+	@./pdhcp -i eth0 -b http://install.dm.gg/dev.php
 relay: pdhcp
 	@./pdhcp -i br0 -r localhost:6767
 remote-server: pdhcp
