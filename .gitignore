@@ -1,5 +1,4 @@
 pdhcp
-debian/pdhcp
 debian/*debhelper*
 debian/*substvars*
 debian/files

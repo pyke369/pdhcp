@@ -320,13 +320,14 @@ func main() {
 	for _, path := range config.GetPaths("backend.listen") {
 		if parts := strings.Split(config.GetStringMatch(path, "_", "^.*?(:\\d+)?((,[^,]+){2})?$"), ","); parts[0] != "_" {
 			if len(parts) > 1 {
-				loader := &dynacert.DYNACERT{Public: parts[1], Key: parts[2]}
+				certificates := &dynacert.DYNACERT{}
+				certificates.Add("*", parts[1], parts[2])
 				server := &http.Server{
 					Addr:         strings.TrimLeft(parts[0], "*"),
 					ReadTimeout:  uconfig.Duration(config.GetDurationBounds("backend.read_timeout", 10, 5, 30)),
 					IdleTimeout:  uconfig.Duration(config.GetDurationBounds("backend.idle_timeout", 30, 5, 30)),
 					WriteTimeout: uconfig.Duration(config.GetDurationBounds("backend.write_timeout", 15, 5, 30)),
-					TLSConfig:    dynacert.IntermediateTLSConfig(loader.GetCertificate),
+					TLSConfig:    dynacert.IntermediateTLSConfig(certificates.GetCertificate),
 					TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
 				}
 				go func(server *http.Server, parts []string) {

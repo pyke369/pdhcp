@@ -26,8 +26,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const progname = "pdhcp"
-const version = "2.0.5"
+const PROGNAME = "pdhcp"
+const VERSION = "2.0.6"
 
 type SOURCE struct {
 	mode    string
@@ -48,7 +48,7 @@ type CONTEXT struct {
 }
 
 var (
-	log      *ulog.ULog
+	logger   *ulog.ULog
 	sources  = map[string]*SOURCE{}
 	contexts = map[string]*CONTEXT{}
 	lock     sync.RWMutex
@@ -68,8 +68,7 @@ func main() {
 	arguments = flag.FlagSet{Usage: func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [OPTIONS...]\n\noptions are:\n", filepath.Base(os.Args[0]))
 		arguments.PrintDefaults()
-	},
-	}
+	}}
 	help := arguments.Bool("h", false, "show this help screen")
 	sversion := arguments.Bool("v", false, "show the program version")
 	list1 := arguments.Bool("l", false, "list all available DHCP options (human format)")
@@ -110,7 +109,7 @@ func main() {
 
 	// show program version
 	if *sversion {
-		fmt.Printf("%s/v%s\n", progname, version)
+		fmt.Printf("%s/v%s\n", PROGNAME, VERSION)
 		os.Exit(0)
 	}
 
@@ -124,9 +123,9 @@ func main() {
 	if *format == "" {
 		*format = "console(output=stderr,time=msdatetime) syslog(facility=local0)"
 	}
-	log = ulog.New(*format)
+	logger = ulog.New(*format)
 	if mode != "client" {
-		log.Info(map[string]interface{}{"mode": mode, "event": "start", "version": version, "pid": os.Getpid()})
+		logger.Info(map[string]interface{}{"mode": mode, "event": "start", "version": VERSION, "pid": os.Getpid()})
 	}
 
 	// start and keep backend workers alive
@@ -143,8 +142,8 @@ func main() {
 								if request, err := http.NewRequest(http.MethodPost, *backend, bytes.NewBuffer(payload)); err == nil {
 									request.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
 									request.Header.Set("Content-Type", "application/json")
-									request.Header.Set("User-Agent", fmt.Sprintf("%s/%s", progname, version))
-									log.Info(map[string]interface{}{"event": "http-send", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+									request.Header.Set("User-Agent", fmt.Sprintf("%s/%s", PROGNAME, VERSION))
+									logger.Info(map[string]interface{}{"event": "http-send", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
 										"txid": fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]), "target": *backend})
 									client := &http.Client{Timeout: 7 * time.Second}
 									if response, err := client.Do(request); err == nil {
@@ -156,7 +155,7 @@ func main() {
 											lock.RLock()
 											if contexts[v4key(frame)] != nil {
 												if packet, err := v4build(frame); err == nil {
-													log.Info(map[string]interface{}{"event": "http-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+													logger.Info(map[string]interface{}{"event": "http-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
 														"txid": fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]), "target": *backend})
 													pmux <- PACKET{source: "http", client: *backend, data: packet}
 												}
@@ -175,25 +174,26 @@ func main() {
 			for *workers > 0 {
 				go func() {
 					for {
-						command, pid := &exec.Cmd{Path: *backend}, 0
+						command, pid := &exec.Cmd{Path: *backend, Stderr: os.Stderr}, 0
 						if stdin, err := command.StdinPipe(); err == nil {
 							if stdout, err := command.StdoutPipe(); err == nil {
 								if err := command.Start(); err == nil {
 									pid = command.Process.Pid
-									log.Info(map[string]interface{}{"event": "worker-start", "backend": *backend, "worker": pid})
-									backend := make(chan FRAME)
+									logger.Info(map[string]interface{}{"event": "worker-start", "backend": *backend, "worker": pid})
+									queue := make(chan FRAME)
 									go func() {
 										reader := bufio.NewReader(stdout)
 										for {
 											if line, err := reader.ReadString('\n'); err != nil {
-												backend <- nil
+												queue <- nil
 												break
 											} else {
 												var frame FRAME
+
 												if err := json.Unmarshal([]byte(line), &frame); err == nil {
 													lock.RLock()
 													if contexts[v4key(frame)] != nil {
-														backend <- frame
+														queue <- frame
 													}
 													lock.RUnlock()
 												} else {
@@ -209,17 +209,17 @@ func main() {
 											if payload, err := json.Marshal(frame); err == nil {
 												payload = append(payload, '\n')
 												if _, err := stdin.Write(payload); err == nil {
-													log.Info(map[string]interface{}{"event": "worker-send", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+													logger.Info(map[string]interface{}{"event": "worker-send", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
 														"txid": fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]), "worker": pid})
 												}
 											}
 
-										case frame := <-backend:
+										case frame := <-queue:
 											if frame == nil {
 												break loop
 											}
 											if packet, err := v4build(frame); err == nil {
-												log.Info(map[string]interface{}{"event": "worker-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+												logger.Info(map[string]interface{}{"event": "worker-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
 													"txid": fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]), "worker": pid})
 												pmux <- PACKET{source: "worker", client: fmt.Sprintf("%d", pid), data: packet}
 											}
@@ -228,7 +228,7 @@ func main() {
 								}
 							}
 						}
-						log.Warn(map[string]interface{}{"event": "worker-stop", "backend": *backend, "worker": pid, "status": fmt.Sprintf("%v", command.Wait())})
+						logger.Warn(map[string]interface{}{"event": "worker-stop", "backend": *backend, "worker": pid, "status": fmt.Sprintf("%v", command.Wait())})
 						time.Sleep(5 * time.Second)
 					}
 				}()
@@ -323,11 +323,11 @@ func main() {
 				if name != "" {
 					if handle, err := NewRawConn(&RawAddr{Port: *port, Device: name}); err == nil {
 						if handle.Local.Addr == nil {
-							log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("skipping interface %s: no ip address", name)})
+							logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("skipping interface %s: no ip address", name)})
 							return
 						}
 						source.rhandle = handle
-						log.Info(map[string]interface{}{"event": "listen", "listen": fmt.Sprintf("%s@%s:%d", name, *address, *port),
+						logger.Info(map[string]interface{}{"event": "listen", "listen": fmt.Sprintf("%s@%s:%d", name, *address, *port),
 							"source": fmt.Sprintf("%s@%s", handle.Local.HardwareAddr, handle.Local.Addr)})
 					} else if mode == "relay" {
 						config := net.ListenConfig{
@@ -341,13 +341,13 @@ func main() {
 							}}
 						if handle, err := config.ListenPacket(context.Background(), "udp", fmt.Sprintf("%s:%d", *address, *port)); err == nil {
 							source.handle = handle
-							log.Info(map[string]interface{}{"event": "listen", "listen": fmt.Sprintf("%s@%s:%d", name, *address, *port)})
+							logger.Info(map[string]interface{}{"event": "listen", "listen": fmt.Sprintf("%s@%s:%d", name, *address, *port)})
 						} else {
-							log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("skipping interface %s: %v", name, err)})
+							logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("skipping interface %s: %v", name, err)})
 							return
 						}
 					} else {
-						log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("skipping interface %s: %v", name, err)})
+						logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("skipping interface %s: %v", name, err)})
 						return
 					}
 				} else {
@@ -362,9 +362,9 @@ func main() {
 						}}
 					if handle, err := config.ListenPacket(context.Background(), "udp", fmt.Sprintf("%s:%d", *address, *port)); err == nil {
 						source.handle = handle
-						log.Info(map[string]interface{}{"event": "listen", "listen": fmt.Sprintf("%s@%s:%d", name, *address, *port)})
+						logger.Info(map[string]interface{}{"event": "listen", "listen": fmt.Sprintf("%s@%s:%d", name, *address, *port)})
 					} else {
-						log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
+						logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
 						return
 					}
 				}
@@ -406,7 +406,7 @@ func main() {
 			select {
 			case packet := <-pmux:
 				if frame, err := v4parse(packet.data); err != nil {
-					log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err), "source": packet.source, "client": packet.client})
+					logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err), "source": packet.source, "client": packet.client})
 				} else {
 					key := v4key(frame)
 					if frame["bootp-opcode"] == "request" {
@@ -443,7 +443,7 @@ func main() {
 						if value, ok := frame["hostname"].(string); ok {
 							hostname = value
 						}
-						log.Info(map[string]interface{}{"event": "request", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+						logger.Info(map[string]interface{}{"event": "request", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
 							"txid":   fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]),
 							"source": packet.source, "client": packet.client, "requested-ip-address": address, "hostname": hostname,
 						})
@@ -463,7 +463,7 @@ func main() {
 							if rpacket, err := v4build(rframe); err == nil {
 								if raddress, err := net.ResolveUDPAddr("udp", *relay); err == nil {
 									if _, err := sources["-"].handle.WriteTo(rpacket, raddress); err == nil {
-										log.Info(map[string]interface{}{"event": "relay-send", "message": fmt.Sprintf("dhcp-%v", rframe["dhcp-message-type"]),
+										logger.Info(map[string]interface{}{"event": "relay-send", "message": fmt.Sprintf("dhcp-%v", rframe["dhcp-message-type"]),
 											"txid": fmt.Sprintf("%v/%v", rframe["client-hardware-address"], rframe["bootp-transaction-id"]), "relay": relay})
 									}
 								}
@@ -500,7 +500,7 @@ func main() {
 							break
 						}
 						if mode == "relay" {
-							log.Info(map[string]interface{}{"event": "relay-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+							logger.Info(map[string]interface{}{"event": "relay-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
 								"txid": fmt.Sprintf("%s/%s", frame["client-hardware-address"], frame["bootp-transaction-id"]), "relay": relay})
 						}
 						if sources[context.source].rhandle != nil && sources[context.source].rhandle.Local.Addr != nil {
@@ -515,21 +515,21 @@ func main() {
 									to.HardwareAddr, _ = net.ParseMAC(frame["client-hardware-address"].(string))
 								}
 								if _, err := sources[context.source].rhandle.WriteTo(nil, to, packet); err != nil {
-									log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
+									logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
 									break
 								}
 							} else {
-								log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
+								logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
 								break
 							}
 						} else {
 							if address, err := net.ResolveUDPAddr("udp", client); err == nil {
 								if _, err := sources[context.source].handle.WriteTo(packet, address); err != nil {
-									log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
+									logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
 									break
 								}
 							} else {
-								log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
+								logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
 								break
 							}
 						}
@@ -543,7 +543,7 @@ func main() {
 								hostname += "." + value
 							}
 						}
-						log.Info(map[string]interface{}{"event": "reply", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+						logger.Info(map[string]interface{}{"event": "reply", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
 							"txid":   fmt.Sprintf("%s/%s", frame["client-hardware-address"], frame["bootp-transaction-id"]),
 							"source": context.source, "client": client, "bootp-assigned-address": address, "hostname": hostname,
 							"duration": fmt.Sprintf("%.2fms", float64(time.Now().Sub(context.created))/float64(time.Millisecond))})

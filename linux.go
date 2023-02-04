@@ -1,4 +1,4 @@
-// +build linux
+//go:build linux
 
 package main
 
@@ -169,7 +169,6 @@ func (rc *RawConn) ReadFrom(data []byte) (read int, from *RawAddr, err error) {
 		}
 		return
 	}
-	return
 }
 
 func (rc *RawConn) WriteTo(from, to *RawAddr, data []byte) (written int, err error) {

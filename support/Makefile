@@ -2,10 +2,12 @@
 
 # build targets
 http-backend: http-backend.go
-	@export GOPATH=/tmp/go; export CGO_ENABLED=0; go build -trimpath -o http-backend http-backend.go && strip http-backend
+	@env GOPATH=/tmp/go go get -d && env GOPATH=/tmp/go CGO_ENABLED=0 go build -trimpath -o http-backend
+	@-strip http-backend 2>/dev/null || true
+	@-upx -9 http-backend 2>/dev/null || true
 clean:
 distclean:
-	@rm -f http-backend
+	@rm -f http-backend *.upx
 
 # run targets
 primary: http-backend

@@ -1,3 +1,9 @@
+pdhcp (2.0.6) stable; urgency=medium
+
+  * update to go 1.20
+
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Sat, 04 Feb 2023 14:50:44 +0100
+
 pdhcp (2.0.5) stable; urgency=medium
 
   * more fixes to service autostart madness
