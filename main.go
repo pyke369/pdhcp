@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math"
 	"math/rand"
 	"net"
@@ -27,10 +27,9 @@ import (
 )
 
 const PROGNAME = "pdhcp"
-const VERSION = "2.0.6"
+const PROGVER = "2.0.6"
 
 type SOURCE struct {
-	mode    string
 	rhandle *RawConn
 	handle  net.PacketConn
 }
@@ -109,7 +108,7 @@ func main() {
 
 	// show program version
 	if *sversion {
-		fmt.Printf("%s/v%s\n", PROGNAME, VERSION)
+		fmt.Printf("%s v%s\n", PROGNAME, PROGVER)
 		os.Exit(0)
 	}
 
@@ -125,7 +124,7 @@ func main() {
 	}
 	logger = ulog.New(*format)
 	if mode != "client" {
-		logger.Info(map[string]interface{}{"mode": mode, "event": "start", "version": VERSION, "pid": os.Getpid()})
+		logger.Info(map[string]interface{}{"mode": mode, "event": "start", "version": PROGVER, "pid": os.Getpid()})
 	}
 
 	// start and keep backend workers alive
@@ -134,41 +133,39 @@ func main() {
 		if strings.HasPrefix(*backend, "http") {
 			go func() {
 				for {
-					select {
-					case frame := <-bsink:
-						go func(frame FRAME) {
-							if payload, err := json.Marshal(frame); err == nil {
-								payload = append(payload, '\n')
-								if request, err := http.NewRequest(http.MethodPost, *backend, bytes.NewBuffer(payload)); err == nil {
-									request.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-									request.Header.Set("Content-Type", "application/json")
-									request.Header.Set("User-Agent", fmt.Sprintf("%s/%s", PROGNAME, VERSION))
-									logger.Info(map[string]interface{}{"event": "http-send", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
-										"txid": fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]), "target": *backend})
-									client := &http.Client{Timeout: 7 * time.Second}
-									if response, err := client.Do(request); err == nil {
-										payload, _ := ioutil.ReadAll(response.Body)
-										response.Body.Close()
+					go func(frame FRAME) {
+						if payload, err := json.Marshal(frame); err == nil {
+							payload = append(payload, '\n')
+							if request, err := http.NewRequest(http.MethodPost, *backend, bytes.NewBuffer(payload)); err == nil {
+								request.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+								request.Header.Set("Content-Type", "application/json")
+								request.Header.Set("User-Agent", fmt.Sprintf("%s/%s", PROGNAME, PROGVER))
+								logger.Info(map[string]interface{}{"event": "http-send", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+									"txid": fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]), "target": *backend})
+								client := &http.Client{Timeout: 7 * time.Second}
+								if response, err := client.Do(request); err == nil {
+									payload, _ := io.ReadAll(response.Body)
+									response.Body.Close()
 
-										var frame FRAME
-										if err := json.Unmarshal(payload, &frame); err == nil {
-											lock.RLock()
-											if contexts[v4key(frame)] != nil {
-												if packet, err := v4build(frame); err == nil {
-													logger.Info(map[string]interface{}{"event": "http-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
-														"txid": fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]), "target": *backend})
-													pmux <- PACKET{source: "http", client: *backend, data: packet}
-												}
+									var frame FRAME
+									if err := json.Unmarshal(payload, &frame); err == nil {
+										lock.RLock()
+										if contexts[v4key(frame)] != nil {
+											if packet, err := v4build(frame); err == nil {
+												logger.Info(map[string]interface{}{"event": "http-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+													"txid": fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]), "target": *backend})
+												pmux <- PACKET{source: "http", client: *backend, data: packet}
 											}
-											lock.RUnlock()
 										}
+										lock.RUnlock()
 									}
 								}
 							}
-						}(frame)
-					}
+						}
+					}(<-bsink)
 				}
 			}()
+
 		} else {
 			*workers = int(math.Min(16, math.Max(1, float64(*workers))))
 			for *workers > 0 {
@@ -403,154 +400,153 @@ func main() {
 
 		// run packets muxer on main goroutine
 		for {
-			select {
-			case packet := <-pmux:
-				if frame, err := v4parse(packet.data); err != nil {
-					logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err), "source": packet.source, "client": packet.client})
-				} else {
-					key := v4key(frame)
-					if frame["bootp-opcode"] == "request" {
-						if _, ok := frame["bootp-relay-address"].(string); ok {
-							if packet.source != "-" {
-								continue
-							}
-						} else if packet.source == "-" {
-							continue
-						} else if value, ok := frame["bootp-client-address"].(string); ok {
-							if host, _, err := net.SplitHostPort(packet.client); err == nil && value != host {
-								continue
-							}
-						}
-						if value, ok := frame["server-identifier"].(string); ok && sources[packet.source].rhandle != nil {
-							if value != sources[packet.source].rhandle.Local.Addr.String() {
-								continue
-							}
-						}
-						if value, ok := frame["client-hardware-address"].(string); ok && packet.hardware != "" && packet.hardware != value {
-							continue
-						}
-						lock.Lock()
-						if contexts[key] != nil {
-							lock.Unlock()
-							break
-						}
-						contexts[key] = &CONTEXT{time.Now(), packet.source, packet.client, frame}
-						lock.Unlock()
-						address, hostname := "", ""
-						if value, ok := frame["requested-ip-address"].(string); ok {
-							address = value
-						}
-						if value, ok := frame["hostname"].(string); ok {
-							hostname = value
-						}
-						logger.Info(map[string]interface{}{"event": "request", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
-							"txid":   fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]),
-							"source": packet.source, "client": packet.client, "requested-ip-address": address, "hostname": hostname,
-						})
-						if mode == "relay" {
-							rframe, _ := v4parse(packet.data)
-							hops := 0
-							if value, ok := rframe["bootp-hops"].(int); ok {
-								hops = value
-							}
-							rframe["bootp-relay-hops"] = hops + 1
-							if *arelay != "" {
-								rframe["bootp-relay-address"] = *arelay
-							} else {
-								rframe["bootp-relay-address"] = sources[packet.source].rhandle.Local.Addr.String()
-							}
-							delete(rframe, "bootp-broadcast")
-							if rpacket, err := v4build(rframe); err == nil {
-								if raddress, err := net.ResolveUDPAddr("udp", *relay); err == nil {
-									if _, err := sources["-"].handle.WriteTo(rpacket, raddress); err == nil {
-										logger.Info(map[string]interface{}{"event": "relay-send", "message": fmt.Sprintf("dhcp-%v", rframe["dhcp-message-type"]),
-											"txid": fmt.Sprintf("%v/%v", rframe["client-hardware-address"], rframe["bootp-transaction-id"]), "relay": relay})
-									}
-								}
-							}
+			packet := <-pmux
+			if frame, err := v4parse(packet.data); err != nil {
+				logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err), "source": packet.source, "client": packet.client})
 
+			} else {
+				key := v4key(frame)
+				if frame["bootp-opcode"] == "request" {
+					if _, ok := frame["bootp-relay-address"].(string); ok {
+						if packet.source != "-" {
+							continue
+						}
+					} else if packet.source == "-" {
+						continue
+					} else if value, ok := frame["bootp-client-address"].(string); ok {
+						if host, _, err := net.SplitHostPort(packet.client); err == nil && value != host {
+							continue
+						}
+					}
+					if value, ok := frame["server-identifier"].(string); ok && sources[packet.source].rhandle != nil {
+						if value != sources[packet.source].rhandle.Local.Addr.String() {
+							continue
+						}
+					}
+					if value, ok := frame["client-hardware-address"].(string); ok && packet.hardware != "" && packet.hardware != value {
+						continue
+					}
+					lock.Lock()
+					if contexts[key] != nil {
+						lock.Unlock()
+						break
+					}
+					contexts[key] = &CONTEXT{time.Now(), packet.source, packet.client, frame}
+					lock.Unlock()
+					address, hostname := "", ""
+					if value, ok := frame["requested-ip-address"].(string); ok {
+						address = value
+					}
+					if value, ok := frame["hostname"].(string); ok {
+						hostname = value
+					}
+					logger.Info(map[string]interface{}{"event": "request", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+						"txid":   fmt.Sprintf("%v/%v", frame["client-hardware-address"], frame["bootp-transaction-id"]),
+						"source": packet.source, "client": packet.client, "requested-ip-address": address, "hostname": hostname,
+					})
+					if mode == "relay" {
+						rframe, _ := v4parse(packet.data)
+						hops := 0
+						if value, ok := rframe["bootp-hops"].(int); ok {
+							hops = value
+						}
+						rframe["bootp-relay-hops"] = hops + 1
+						if *arelay != "" {
+							rframe["bootp-relay-address"] = *arelay
 						} else {
-							if sources[packet.source].rhandle != nil {
-								frame["source-address"] = sources[packet.source].rhandle.Local.Addr.String()
-							}
-							select {
-							case bsink <- frame:
-							default:
+							rframe["bootp-relay-address"] = sources[packet.source].rhandle.Local.Addr.String()
+						}
+						delete(rframe, "bootp-broadcast")
+						if rpacket, err := v4build(rframe); err == nil {
+							if raddress, err := net.ResolveUDPAddr("udp", *relay); err == nil {
+								if _, err := sources["-"].handle.WriteTo(rpacket, raddress); err == nil {
+									logger.Info(map[string]interface{}{"event": "relay-send", "message": fmt.Sprintf("dhcp-%v", rframe["dhcp-message-type"]),
+										"txid": fmt.Sprintf("%v/%v", rframe["client-hardware-address"], rframe["bootp-transaction-id"]), "relay": relay})
+								}
 							}
 						}
 
 					} else {
-						lock.RLock()
-						context := contexts[key]
-						lock.RUnlock()
-						if context == nil {
-							break
+						if sources[packet.source].rhandle != nil {
+							frame["source-address"] = sources[packet.source].rhandle.Local.Addr.String()
 						}
-						client := context.client
-						if address, port, err := net.SplitHostPort(context.client); err == nil {
-							if value, ok := context.data["bootp-broadcast"].(bool); (ok && value) || net.ParseIP(address).Equal(net.IPv4zero) {
-								client = fmt.Sprintf("%s:%s", net.IPv4bcast, port)
-								frame["bootp-broadcast"] = value
-							}
-							if value, ok := context.data["bootp-relay-address"].(string); ok && value != "" {
-								client = fmt.Sprintf("%s:%s", value, port)
-								frame["bootp-relay-address"] = value
-							}
-						} else {
-							break
+						select {
+						case bsink <- frame:
+						default:
 						}
-						if mode == "relay" {
-							logger.Info(map[string]interface{}{"event": "relay-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
-								"txid": fmt.Sprintf("%s/%s", frame["client-hardware-address"], frame["bootp-transaction-id"]), "relay": relay})
-						}
-						if sources[context.source].rhandle != nil && sources[context.source].rhandle.Local.Addr != nil {
-							frame["server-identifier"] = sources[context.source].rhandle.Local.Addr.String()
-						}
-						packet, _ := v4build(frame)
-						if sources[context.source].rhandle != nil {
-							if address, value, err := net.SplitHostPort(client); err == nil {
-								port, _ := strconv.Atoi(value)
-								to := &RawAddr{Addr: net.ParseIP(address), Port: port}
-								if !to.Addr.Equal(net.IPv4bcast) && !to.Addr.Equal(net.IPv6linklocalallrouters) {
-									to.HardwareAddr, _ = net.ParseMAC(frame["client-hardware-address"].(string))
-								}
-								if _, err := sources[context.source].rhandle.WriteTo(nil, to, packet); err != nil {
-									logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
-									break
-								}
-							} else {
-								logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
-								break
-							}
-						} else {
-							if address, err := net.ResolveUDPAddr("udp", client); err == nil {
-								if _, err := sources[context.source].handle.WriteTo(packet, address); err != nil {
-									logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
-									break
-								}
-							} else {
-								logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
-								break
-							}
-						}
-						address, hostname := "", ""
-						if value, ok := frame["bootp-assigned-address"].(string); ok {
-							address = value
-						}
-						if value, ok := frame["hostname"].(string); ok {
-							hostname = value
-							if value, ok := frame["domain-name"].(string); ok {
-								hostname += "." + value
-							}
-						}
-						logger.Info(map[string]interface{}{"event": "reply", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
-							"txid":   fmt.Sprintf("%s/%s", frame["client-hardware-address"], frame["bootp-transaction-id"]),
-							"source": context.source, "client": client, "bootp-assigned-address": address, "hostname": hostname,
-							"duration": fmt.Sprintf("%.2fms", float64(time.Now().Sub(context.created))/float64(time.Millisecond))})
-						lock.Lock()
-						delete(contexts, key)
-						lock.Unlock()
 					}
+
+				} else {
+					lock.RLock()
+					ctx := contexts[key]
+					lock.RUnlock()
+					if ctx == nil {
+						break
+					}
+					client := ctx.client
+					if address, port, err := net.SplitHostPort(ctx.client); err == nil {
+						if value, ok := ctx.data["bootp-broadcast"].(bool); (ok && value) || net.ParseIP(address).Equal(net.IPv4zero) {
+							client = fmt.Sprintf("%s:%s", net.IPv4bcast, port)
+							frame["bootp-broadcast"] = value
+						}
+						if value, ok := ctx.data["bootp-relay-address"].(string); ok && value != "" {
+							client = fmt.Sprintf("%s:%s", value, port)
+							frame["bootp-relay-address"] = value
+						}
+					} else {
+						break
+					}
+					if mode == "relay" {
+						logger.Info(map[string]interface{}{"event": "relay-receive", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+							"txid": fmt.Sprintf("%s/%s", frame["client-hardware-address"], frame["bootp-transaction-id"]), "relay": relay})
+					}
+					if sources[ctx.source].rhandle != nil && sources[ctx.source].rhandle.Local.Addr != nil {
+						frame["server-identifier"] = sources[ctx.source].rhandle.Local.Addr.String()
+					}
+					packet, _ := v4build(frame)
+					if sources[ctx.source].rhandle != nil {
+						if address, value, err := net.SplitHostPort(client); err == nil {
+							port, _ := strconv.Atoi(value)
+							to := &RawAddr{Addr: net.ParseIP(address), Port: port}
+							if !to.Addr.Equal(net.IPv4bcast) && !to.Addr.Equal(net.IPv6linklocalallrouters) {
+								to.HardwareAddr, _ = net.ParseMAC(frame["client-hardware-address"].(string))
+							}
+							if _, err := sources[ctx.source].rhandle.WriteTo(nil, to, packet); err != nil {
+								logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
+								break
+							}
+						} else {
+							logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
+							break
+						}
+					} else {
+						if address, err := net.ResolveUDPAddr("udp", client); err == nil {
+							if _, err := sources[ctx.source].handle.WriteTo(packet, address); err != nil {
+								logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
+								break
+							}
+						} else {
+							logger.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("%v", err)})
+							break
+						}
+					}
+					address, hostname := "", ""
+					if value, ok := frame["bootp-assigned-address"].(string); ok {
+						address = value
+					}
+					if value, ok := frame["hostname"].(string); ok {
+						hostname = value
+						if value, ok := frame["domain-name"].(string); ok {
+							hostname += "." + value
+						}
+					}
+					logger.Info(map[string]interface{}{"event": "reply", "message": fmt.Sprintf("dhcp-%v", frame["dhcp-message-type"]),
+						"txid":   fmt.Sprintf("%s/%s", frame["client-hardware-address"], frame["bootp-transaction-id"]),
+						"source": ctx.source, "client": client, "bootp-assigned-address": address, "hostname": hostname,
+						"duration": fmt.Sprintf("%.2fms", float64(time.Since(ctx.created))/float64(time.Millisecond))})
+					lock.Lock()
+					delete(contexts, key)
+					lock.Unlock()
 				}
 			}
 		}

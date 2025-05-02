@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -24,8 +24,7 @@ import (
 	"github.com/pyke369/golang-support/ulog"
 )
 
-const progname = "http-backend"
-const version = "2.0.0"
+const PROGVER = "2.0.0"
 
 type LEASE struct {
 	Client   string `json:"client"`
@@ -99,7 +98,7 @@ func please(request map[string]interface{}, duration int64, first, last net.IP) 
 	return
 }
 
-func assign(input map[string]interface{}, request map[string]interface{}, key, value string) (output map[string]interface{}) {
+func assign(input, request map[string]interface{}, key, value string) (output map[string]interface{}) {
 	output = input
 	if matcher := rcache.Get(`^(array|dup|drop|lease)\((.*?)\)$`); matcher != nil && matcher.MatchString(value) {
 		matches := matcher.FindStringSubmatch(value)
@@ -136,7 +135,7 @@ func assign(input map[string]interface{}, request map[string]interface{}, key, v
 	return output
 }
 
-func build(input map[string]interface{}, request map[string]interface{}, path string) (output map[string]interface{}) {
+func build(input, request map[string]interface{}, path string) (output map[string]interface{}) {
 	output = input
 	if output == nil {
 		output = map[string]interface{}{}
@@ -145,8 +144,8 @@ func build(input map[string]interface{}, request map[string]interface{}, path st
 		return output
 	}
 	sections := []string{}
-	for _, section := range config.GetPaths(path) {
-		if len(config.GetPaths(section+".match")) > 0 {
+	for _, section := range config.Paths(path) {
+		if len(config.Paths(section+".match")) > 0 {
 			sections = append(sections, section)
 		} else {
 			sections = append(sections, "!"+section)
@@ -157,18 +156,18 @@ func build(input map[string]interface{}, request map[string]interface{}, path st
 		sections[index] = strings.TrimPrefix(section, "!")
 	}
 	for _, section := range sections {
-		if matches := config.GetPaths(section + ".match"); len(matches) > 0 {
+		if matches := config.Paths(section + ".match"); len(matches) > 0 {
 			matched := true
 			for _, match := range matches {
-				rvalue, mvalue, negate, regex := "", strings.TrimSpace(config.GetString(match, "")), false, false
+				rvalue, mvalue, negate, regex := "", strings.TrimSpace(config.String(match)), false, false
 				if value, ok := request[strings.TrimPrefix(match, section+".match.")]; ok {
 					rvalue = fmt.Sprintf("%v", value)
 				}
-				if len(mvalue) > 0 && mvalue[0] == '!' {
+				if mvalue != "" && mvalue[0] == '!' {
 					negate = true
 					mvalue = strings.TrimSpace(mvalue[1:])
 				}
-				if len(mvalue) > 0 && mvalue[0] == '~' {
+				if mvalue != "" && mvalue[0] == '~' {
 					regex = true
 					mvalue = strings.TrimSpace(mvalue[1:])
 				}
@@ -205,17 +204,17 @@ func build(input map[string]interface{}, request map[string]interface{}, path st
 			}
 		}
 		if !strings.HasSuffix(section, ".match") {
-			if paths := config.GetPaths(section); len(paths) > 0 {
+			if paths := config.Paths(section); len(paths) > 0 {
 				if strings.HasSuffix(paths[0], ".0") {
 					values := []string{}
 					for _, path := range paths {
-						values = append(values, strings.ReplaceAll(config.GetString(path, ""), "|", ""))
+						values = append(values, strings.ReplaceAll(config.String(path), "|", ""))
 					}
 					output = assign(output, request, strings.TrimPrefix(section, path+"."), "array("+strings.Join(values, "|")+")")
 				} else {
 					output = build(output, request, section)
 				}
-			} else if value := config.GetString(section, ""); value != "" {
+			} else if value := config.String(section); value != "" {
 				output = assign(output, request, strings.TrimPrefix(section, path+"."), value)
 			}
 		}
@@ -242,7 +241,7 @@ func handler(response http.ResponseWriter, request *http.Request) {
 		response.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if body, err := ioutil.ReadAll(request.Body); err != nil {
+	if body, err := io.ReadAll(request.Body); err != nil {
 		response.WriteHeader(http.StatusUnprocessableEntity)
 	} else {
 		if err := json.Unmarshal(body, &frame); err != nil {
@@ -306,28 +305,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "configuration file syntax error: %s - aborting\n", err)
 		os.Exit(2)
 	}
-	log = ulog.New(config.GetString("backend.log", "console(output=stdout)"))
-	log.Info(map[string]interface{}{"event": "start", "config": os.Args[1], "pid": os.Getpid(), "version": version})
-	alog = ulog.New(config.GetString("backend.access", ""))
+	log = ulog.New(config.String("backend.log", "console(output=stdout)"))
+	log.Info(map[string]interface{}{"event": "start", "config": os.Args[1], "pid": os.Getpid(), "version": PROGVER})
+	alog = ulog.New(config.String("backend.access"))
 
-	if path := config.GetString("backend.leases", ""); path != "" {
-		if content, err := ioutil.ReadFile(path); err == nil {
+	if path := config.String("backend.leases"); path != "" {
+		if content, err := os.ReadFile(path); err == nil {
 			json.Unmarshal(content, &leases)
 		}
 	}
 
 	http.HandleFunc("/", handler)
-	for _, path := range config.GetPaths("backend.listen") {
-		if parts := strings.Split(config.GetStringMatch(path, "_", "^.*?(:\\d+)?((,[^,]+){2})?$"), ","); parts[0] != "_" {
+	for _, path := range config.Paths("backend.listen") {
+		if parts := strings.Split(config.StringMatch(path, "_", "^.*?(:\\d+)?((,[^,]+){2})?$"), ","); parts[0] != "_" {
 			if len(parts) > 1 {
 				certificates := &dynacert.DYNACERT{}
 				certificates.Add("*", parts[1], parts[2])
 				server := &http.Server{
 					Addr:         strings.TrimLeft(parts[0], "*"),
-					ReadTimeout:  uconfig.Duration(config.GetDurationBounds("backend.read_timeout", 10, 5, 30)),
-					IdleTimeout:  uconfig.Duration(config.GetDurationBounds("backend.idle_timeout", 30, 5, 30)),
-					WriteTimeout: uconfig.Duration(config.GetDurationBounds("backend.write_timeout", 15, 5, 30)),
-					TLSConfig:    dynacert.IntermediateTLSConfig(certificates.GetCertificate),
+					ReadTimeout:  config.DurationBounds("backend.read_timeout", 10, 5, 30),
+					IdleTimeout:  config.DurationBounds("backend.idle_timeout", 30, 5, 30),
+					WriteTimeout: config.DurationBounds("backend.write_timeout", 15, 5, 30),
+					TLSConfig:    certificates.TLSConfig(nil),
 					TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
 				}
 				go func(server *http.Server, parts []string) {
@@ -340,9 +339,9 @@ func main() {
 			} else {
 				server := &http.Server{
 					Addr:         strings.TrimLeft(parts[0], "*"),
-					ReadTimeout:  uconfig.Duration(config.GetDurationBounds("backend.read_timeout", 10, 5, 30)),
-					IdleTimeout:  uconfig.Duration(config.GetDurationBounds("backend.idle_timeout", 30, 5, 30)),
-					WriteTimeout: uconfig.Duration(config.GetDurationBounds("backend.write_timeout", 15, 5, 30)),
+					ReadTimeout:  config.DurationBounds("backend.read_timeout", 10, 5, 30),
+					IdleTimeout:  config.DurationBounds("backend.idle_timeout", 30, 5, 30),
+					WriteTimeout: config.DurationBounds("backend.write_timeout", 15, 5, 30),
 				}
 				go func(server *http.Server, parts []string) {
 					log.Info(map[string]interface{}{"event": "listen", "listen": parts[0]})
@@ -357,10 +356,10 @@ func main() {
 
 	go func() {
 		for range time.Tick(5 * time.Second) {
-			if sync := config.GetString("backend.sync", ""); sync != "" {
+			if bsync := config.String("backend.sync"); bsync != "" {
 				client := &http.Client{Timeout: 5 * time.Second}
-				if response, err := client.Get(sync); err == nil {
-					content, _ := ioutil.ReadAll(response.Body)
+				if response, err := client.Get(bsync); err == nil {
+					content, _ := io.ReadAll(response.Body)
 					response.Body.Close()
 					if response.StatusCode/100 == 2 {
 						sleases := map[string]LEASE{}
@@ -382,10 +381,10 @@ func main() {
 				}
 			}
 			lock.Unlock()
-			if path := config.GetString("backend.leases", ""); path != "" {
+			if path := config.String("backend.leases"); path != "" {
 				lock.RLock()
 				if content, err := json.Marshal(leases); err == nil {
-					ioutil.WriteFile(path, content, 0644)
+					os.WriteFile(path, content, 0o644)
 				}
 				lock.RUnlock()
 			}
@@ -395,17 +394,14 @@ func main() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGHUP)
 	for {
-		signal := <-signals
-		switch {
-		case signal == syscall.SIGHUP:
-			if _, err = uconfig.New(os.Args[1]); err == nil {
-				config.Load(os.Args[1])
-				log.Load(config.GetString("backend.log", "console(output=stdout)"))
-				log.Info(map[string]interface{}{"event": "reload", "config": os.Args[1], "pid": os.Getpid(), "version": version})
-				alog.Load(config.GetString("backend.access", ""))
-			} else {
-				log.Warn(map[string]interface{}{"event": "reload", "config": os.Args[1], "error": fmt.Sprintf("invalid configuration (%v)", err)})
-			}
+		<-signals
+		if _, err = uconfig.New(os.Args[1]); err == nil {
+			config.Load(os.Args[1])
+			log.Load(config.String("backend.log", "console(output=stdout)"))
+			log.Info(map[string]interface{}{"event": "reload", "config": os.Args[1], "pid": os.Getpid(), "version": PROGVER})
+			alog.Load(config.String("backend.access"))
+		} else {
+			log.Warn(map[string]interface{}{"event": "reload", "config": os.Args[1], "error": fmt.Sprintf("invalid configuration (%v)", err)})
 		}
 	}
 }

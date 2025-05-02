@@ -1,14 +1,20 @@
 #!/bin/sh
 
-# build targets
 .PHONY: support
+
+# build targets
 all: pdhcp support
 pdhcp: *.go
-	@env GOPATH=/tmp/go go get -d && env GOPATH=/tmp/go CGO_ENABLED=0 go build -trimpath -o pdhcp
+	@env GOPATH=/tmp/go go get && env GOPATH=/tmp/go CGO_ENABLED=0 go build -trimpath -o pdhcp
 	@-strip pdhcp 2>/dev/null || true
-	@-upx -9 pdhcp 2>/dev/null || true
+	@#-upx -9 pdhcp 2>/dev/null || true
 support:
 	@make -C support
+lint:
+	@-go vet ./... || true
+	@-staticcheck ./... || true
+	@-gocritic check -enableAll ./... || true
+	@-govulncheck ./... || true
 clean:
 	@make -C support clean
 distclean:

@@ -1,8 +1,8 @@
 module pdhcp
 
-go 1.20
+go 1.24
 
 require (
-	github.com/pyke369/golang-support v0.0.0-20230108182845-9fe2fa61d8f6
-	golang.org/x/sys v0.4.0
+	github.com/pyke369/golang-support v0.0.0-20250411121841-606cba981e0a
+	golang.org/x/sys v0.32.0
 )

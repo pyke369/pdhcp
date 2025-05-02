@@ -1,9 +1,10 @@
+//go:build !linux && !freebsd && !openbsd && !netbsd && !darwin
 // +build !linux,!freebsd,!openbsd,!netbsd,!darwin
 
 package main
 
 import (
-	"fmt"
+	"errors"
 	"net"
 	"time"
 )
@@ -20,19 +21,19 @@ type RawConn struct {
 }
 
 func NewRawConn(bind *RawAddr) (rc *RawConn, err error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, errors.New("not implemented")
 }
 
 func (rc *RawConn) SetReadDeadline(deadline time.Time) error {
-	return fmt.Errorf("not implemented")
+	return errors.New("not implemented")
 }
 
 func (rc *RawConn) ReadFrom(data []byte) (read int, from *RawAddr, err error) {
-	return 0, nil, fmt.Errorf("not implemented")
+	return 0, nil, errors.New("not implemented")
 }
 
 func (rc *RawConn) WriteTo(from, to *RawAddr, data []byte) (written int, err error) {
-	return 0, fmt.Errorf("not implemented")
+	return 0, errors.New("not implemented")
 }
 
 func BindToDevice(handle int, name string) error {

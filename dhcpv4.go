@@ -311,7 +311,7 @@ func v4options(marshal bool) {
 	fmt.Printf("option                                  type                                    id\n")
 	fmt.Printf("--------------------------------------- --------------------------------------- ---\n")
 	ids := []int{}
-	for id, _ := range V4ROPTIONS {
+	for id := range V4ROPTIONS {
 		ids = append(ids, id)
 	}
 	sort.Ints(ids)
@@ -402,7 +402,7 @@ func v4parse(packet []byte) (frame FRAME, err error) {
 				break
 			}
 		}
-		frame["bootp-server-name"] = fmt.Sprintf("%s", packet[44:offset])
+		frame["bootp-server-name"] = string(packet[44:offset])
 	}
 	offset = 108
 	if packet[offset] != 0 {
@@ -411,7 +411,7 @@ func v4parse(packet []byte) (frame FRAME, err error) {
 				break
 			}
 		}
-		frame["bootp-filename"] = fmt.Sprintf("%s", packet[108:offset])
+		frame["bootp-filename"] = string(packet[108:offset])
 	}
 	if value := binary.BigEndian.Uint32(packet[236:]); value != 0x63825363 {
 		return frame, nil
@@ -472,7 +472,7 @@ loop:
 					case V4MODE_BOOLEAN:
 						value = packet[index] != 0
 					case V4MODE_STRING:
-						value = fmt.Sprintf("%s", packet[offset+2:offset+2+size])
+						value = string(packet[offset+2 : offset+2+size])
 					case V4MODE_INET4:
 						address := binary.BigEndian.Uint32(packet[index:])
 						value = fmt.Sprintf("%d.%d.%d.%d", byte(address>>24), byte(address>>16), byte(address>>8), byte(address))
@@ -621,10 +621,10 @@ func v4build(frame FRAME) (packet []byte, err error) {
 			hex.Decode(packet[28:], []byte(strings.ReplaceAll(value, ":", "")))
 		}
 	}
-	if value, ok := frame["bootp-server-name"].(string); ok && len(value) > 0 {
+	if value, ok := frame["bootp-server-name"].(string); ok && value != "" {
 		copy(packet[44:107], value)
 	}
-	if value, ok := frame["bootp-filename"].(string); ok && len(value) > 0 {
+	if value, ok := frame["bootp-filename"].(string); ok && value != "" {
 		copy(packet[108:235], value)
 	}
 	if !dhcp {
