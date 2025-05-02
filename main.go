@@ -81,7 +81,9 @@ func main() {
 	extra := arguments.String("R", "", "add/modify DHCP attributes in the default client request")
 	address := arguments.String("a", "0.0.0.0", "use an alternate listen address")
 	port := arguments.Int("p", 67, "use an alternate DHCP port")
-	format := arguments.String("f", "", "provide an alternate logging configuration")
+	format := arguments.String("f", "", "specify an alternate logging format")
+	pretty := arguments.Bool("P", false, "pretty-print JSON structures")
+	dump := arguments.Bool("d", false, "dump client request")
 	if err := arguments.Parse(os.Args[1:]); err != nil {
 		os.Exit(1)
 	}
@@ -114,7 +116,7 @@ func main() {
 
 	// show available DHCP attributes
 	if *list1 || *list2 {
-		v4options(*list2)
+		v4options(*list2, *pretty)
 		os.Exit(0)
 	}
 
@@ -273,6 +275,15 @@ func main() {
 			if value, ok := frame["bootp-client-address"].(string); ok {
 				from.Addr = net.ParseIP(value)
 			}
+			if *dump {
+				content, err := json.Marshal(frame)
+				if *pretty {
+					content, err = json.MarshalIndent(frame, "", "  ")
+				}
+				if err == nil {
+					fmt.Printf("%s\n", content)
+				}
+			}
 			if packet, err := v4build(frame); err == nil {
 				if _, err := handle.WriteTo(from, to, packet); err == nil {
 					handle.SetReadDeadline(time.Now().Add(time.Duration(try) * time.Second))
@@ -286,12 +297,15 @@ func main() {
 									if mresponse, ok := rframe["dhcp-message-type"].(string); ok {
 										if response := V4MSGTYPES[V4RMSGTYPES[mresponse]]; response != nil &&
 											(response.request == 0 || response.request == V4RMSGTYPES[mrequest]) {
-											if content, err := json.Marshal(rframe); err == nil {
+											content, err := json.Marshal(rframe)
+											if *pretty {
+												content, err = json.MarshalIndent(rframe, "", "  ")
+											}
+											if err == nil {
 												fmt.Printf("%s\n", content)
 												os.Exit(0)
-											} else {
-												bail(err)
 											}
+											bail(err)
 										}
 									}
 								}

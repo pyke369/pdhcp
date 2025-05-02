@@ -297,14 +297,20 @@ func init() {
 	}
 }
 
-func v4options(marshal bool) {
+func v4options(marshal, pretty bool) {
 	if marshal {
 		options := map[string]interface{}{}
 		for name, option := range V4OPTIONS {
 			options[name] = map[string]interface{}{"id": option.id, "mode": V4MODE_NAMES[option.mode&V4MODE_MASK], "list": option.mode&V4MODE_LIST != 0}
 		}
-		if content, err := json.Marshal(options); err == nil {
-			fmt.Printf("%s\n", content)
+		if pretty {
+			if content, err := json.MarshalIndent(options, "", "  "); err == nil {
+				fmt.Printf("%s\n", content)
+			}
+		} else {
+			if content, err := json.Marshal(options); err == nil {
+				fmt.Printf("%s\n", content)
+			}
 		}
 		return
 	}
