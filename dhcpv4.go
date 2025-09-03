@@ -621,7 +621,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 		}
 	}
 	if value, ok := frame["client-hardware-address"].(string); ok {
-		if matcher := rcache.Get(fmt.Sprintf("^([0-9a-f][0-9a-f]:){%d}[0-9a-f][0-9a-f]$", packet[2]-1)); matcher == nil || !matcher.MatchString(value) {
+		if !rcache.Get(fmt.Sprintf("^([0-9a-f][0-9a-f]:){%d}[0-9a-f][0-9a-f]$", packet[2]-1)).MatchString(value) {
 			return nil, fmt.Errorf(`invalid hardware address "%s"`, value)
 		} else {
 			hex.Decode(packet[28:], []byte(strings.ReplaceAll(value, ":", "")))
@@ -681,7 +681,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 			switch option.mode & V4MODE_MASK {
 			case V4MODE_BINARY:
 				if tvalue, ok := item.(string); ok && tvalue != "" {
-					if matcher := rcache.Get(fmt.Sprintf(`^([0-9a-f][0-9a-f]){1,%d}$`, 254-size)); matcher == nil || !matcher.MatchString(tvalue) {
+					if !rcache.Get(fmt.Sprintf(`^([0-9a-f][0-9a-f]){1,%d}$`, 254-size)).MatchString(tvalue) {
 						return nil, fmt.Errorf(`invalid format "%v" for binary option "%s"`, item, name)
 					} else {
 						hex.Decode(packet[offset+2+size:], []byte(tvalue))
@@ -692,7 +692,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				}
 			case V4MODE_SBINARY:
 				if tvalue, ok := item.(string); ok && tvalue != "" {
-					if matcher := rcache.Get(fmt.Sprintf(`^([0-9a-f][0-9a-f]:){0,%d}[0-9a-f][0-9a-f]$`, 253-size)); matcher == nil || !matcher.MatchString(tvalue) {
+					if !rcache.Get(fmt.Sprintf(`^([0-9a-f][0-9a-f]:){0,%d}[0-9a-f][0-9a-f]$`, 253-size)).MatchString(tvalue) {
 						return nil, fmt.Errorf(`invalid format "%v" for separated-binary option "%s"`, item, name)
 					} else {
 						tvalue = strings.ReplaceAll(tvalue, ":", "")
@@ -727,7 +727,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				}
 			case V4MODE_DINTEGER:
 				if tvalue, ok := item.(string); ok && tvalue != "" {
-					if matcher := rcache.Get(fmt.Sprintf(`^(\d+\.){0,%d}\d+$`, 253-size)); matcher == nil || !matcher.MatchString(tvalue) {
+					if !rcache.Get(fmt.Sprintf(`^(\d+\.){0,%d}\d+$`, 253-size)).MatchString(tvalue) {
 						return nil, fmt.Errorf(`invalid format "%v" for dotted-integer option "%s"`, item, name)
 					} else {
 						for _, integer := range strings.Split(tvalue, ".") {
@@ -774,7 +774,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				}
 			case V4MODE_INET4PAIR:
 				if tvalue, ok := item.(string); ok {
-					if matcher := rcache.Get(`^((?:\d+\.){3}\d+):((?:\d+\.){3}\d+)$`); matcher == nil || !matcher.MatchString(tvalue) {
+					if matcher := rcache.Get(`^((?:\d+\.){3}\d+):((?:\d+\.){3}\d+)$`); !matcher.MatchString(tvalue) {
 						return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
 					} else {
 						matches := matcher.FindStringSubmatch(tvalue)
@@ -793,7 +793,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				}
 			case V4MODE_CIDR4:
 				if tvalue, ok := item.(string); ok {
-					if matcher := rcache.Get(`^((?:\d+\.){3}\d+)/(\d+)$`); matcher == nil || !matcher.MatchString(tvalue) {
+					if matcher := rcache.Get(`^((?:\d+\.){3}\d+)/(\d+)$`); !matcher.MatchString(tvalue) {
 						return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
 					} else {
 						matches := matcher.FindStringSubmatch(tvalue)

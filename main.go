@@ -27,7 +27,7 @@ import (
 )
 
 const PROGNAME = "pdhcp"
-const PROGVER = "2.0.6"
+const PROGVER = "2.0.7"
 
 type SOURCE struct {
 	rhandle *RawConn
