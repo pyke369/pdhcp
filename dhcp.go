@@ -1,3 +1,3 @@
 package main
 
-type FRAME map[string]interface{}
+type FRAME map[string]any

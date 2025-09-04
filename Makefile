@@ -28,7 +28,7 @@ debclean:
 
 # run targets
 run: pdhcp
-	@./pdhcp -i eth0
+	@./pdhcp -i eth0 -d -P
 client: pdhcp
 	@./pdhcp -i veth0i
 local-backend: pdhcp

@@ -42,8 +42,10 @@ const (
 	V4MODE_INET4     = 9
 	V4MODE_INET4PAIR = 10
 	V4MODE_CIDR4     = 11
-	V4MODE_MSGTYPE   = 12
-	V4MODE_OPTION    = 13
+	V4MODE_DOMAIN    = 12
+	V4MODE_ROUTE4    = 13
+	V4MODE_MSGTYPE   = 14
+	V4MODE_OPTION    = 15
 	V4MODE_MASK      = 0x7f
 	V4MODE_LIST      = 0x80
 )
@@ -61,6 +63,8 @@ var (
 		V4MODE_INET4:     "inet4",
 		V4MODE_INET4PAIR: "inet4pair",
 		V4MODE_CIDR4:     "cidr4",
+		V4MODE_ROUTE4:    "route4",
+		V4MODE_DOMAIN:    "domain",
 		V4MODE_MSGTYPE:   "msgtype",
 		V4MODE_OPTION:    "option",
 	}
@@ -216,9 +220,9 @@ var (
 		"auto-configuration":                 &V4OPTION{116, V4MODE_INTEGER, 1, 1, 0},
 		"name-service-search":                &V4OPTION{117, V4MODE_INTEGER | V4MODE_LIST, 2, 0, 2},
 		"subnet-selection":                   &V4OPTION{118, V4MODE_INET4, 4, 4, 0},
-		"domain-search":                      &V4OPTION{119, V4MODE_STRING, 1, 0, 0},
+		"domain-search":                      &V4OPTION{119, V4MODE_DOMAIN | V4MODE_LIST, 1, 0, 0},
 		"sip-server":                         &V4OPTION{120, V4MODE_BINARY, 1, 0, 0},
-		"classless-route":                    &V4OPTION{121, V4MODE_BINARY, 1, 0, 0},
+		"classless-route":                    &V4OPTION{121, V4MODE_ROUTE4 | V4MODE_LIST, 5, 0, 0},
 		"cablelabs-configuration":            &V4OPTION{122, V4MODE_BINARY, 1, 0, 0},
 		"geoconf":                            &V4OPTION{123, V4MODE_BINARY, 1, 0, 0},
 		"vi-vendor-class":                    &V4OPTION{124, V4MODE_BINARY, 1, 0, 0},
@@ -299,9 +303,9 @@ func init() {
 
 func v4options(marshal, pretty bool) {
 	if marshal {
-		options := map[string]interface{}{}
+		options := map[string]any{}
 		for name, option := range V4OPTIONS {
-			options[name] = map[string]interface{}{"id": option.id, "mode": V4MODE_NAMES[option.mode&V4MODE_MASK], "list": option.mode&V4MODE_LIST != 0}
+			options[name] = map[string]any{"id": option.id, "mode": V4MODE_NAMES[option.mode&V4MODE_MASK], "list": option.mode&V4MODE_LIST != 0}
 		}
 		if pretty {
 			if content, err := json.MarshalIndent(options, "", "  "); err == nil {
@@ -344,6 +348,10 @@ func v4options(marshal, pretty bool) {
 			mode = "IPv4 addresses pair"
 		case V4MODE_CIDR4:
 			mode = "IPv4 CIDR block"
+		case V4MODE_DOMAIN:
+			mode = "DNS domain"
+		case V4MODE_ROUTE4:
+			mode = "IPv4 classless route"
 		case V4MODE_OPCODE:
 			mode = "BOOTP opcode"
 		case V4MODE_HWTYPE:
@@ -446,16 +454,18 @@ loop:
 			if offset+2+size <= len(packet) {
 				frame[name] = 0
 				if option.mode&V4MODE_LIST != 0 {
-					frame[name] = []interface{}{}
+					frame[name] = []any{}
 				}
 				for index := offset + 2; index < offset+2+size; {
-					var value interface{}
+					var value any
 
 					switch option.mode & V4MODE_MASK {
 					case V4MODE_BINARY:
 						value = fmt.Sprintf("%x", packet[index:index+size])
+
 					case V4MODE_SBINARY:
 						value = strings.ReplaceAll(fmt.Sprintf("% x", packet[index:index+size]), " ", ":")
+
 					case V4MODE_INTEGER:
 						switch option.min {
 						case 1:
@@ -469,47 +479,95 @@ loop:
 						default:
 							return nil, fmt.Errorf(`invalid integer length %d for option "%s"`, option.min, name)
 						}
+
 					case V4MODE_DINTEGER:
 						dinteger := ""
 						for position := index; position < index+size; position++ {
 							dinteger += fmt.Sprintf("%d.", packet[position])
 						}
 						value = strings.Trim(dinteger, ".")
+
 					case V4MODE_BOOLEAN:
 						value = packet[index] != 0
+
 					case V4MODE_STRING:
 						value = string(packet[offset+2 : offset+2+size])
+
 					case V4MODE_INET4:
 						address := binary.BigEndian.Uint32(packet[index:])
 						value = fmt.Sprintf("%d.%d.%d.%d", byte(address>>24), byte(address>>16), byte(address>>8), byte(address))
+
 					case V4MODE_INET4PAIR:
 						address1 := binary.BigEndian.Uint32(packet[index:])
 						address2 := binary.BigEndian.Uint32(packet[index+4:])
-						value = fmt.Sprintf("%d.%d.%d.%d:%d.%d.%d.%d",
+						value = fmt.Sprintf(
+							"%d.%d.%d.%d:%d.%d.%d.%d",
 							byte(address1>>24), byte(address1>>16), byte(address1>>8), byte(address1),
-							byte(address2>>24), byte(address2>>16), byte(address2>>8), byte(address2))
+							byte(address2>>24), byte(address2>>16), byte(address2>>8), byte(address2),
+						)
+
 					case V4MODE_CIDR4:
 						address, bmask := binary.BigEndian.Uint32(packet[index:]), binary.BigEndian.Uint32(packet[index+4:])
 						mask := net.IPv4Mask(byte(bmask>>24), byte(bmask>>16), byte(bmask>>8), byte(bmask))
 						size, _ := mask.Size()
 						value = fmt.Sprintf("%d.%d.%d.%d/%d", byte(address>>24), byte(address>>16), byte(address>>8), byte(address), size)
+
+					case V4MODE_DOMAIN:
+						domain := ""
+						for index < offset+2+size {
+							if packet[index] == 0 {
+								index++
+								break
+							}
+							dsize := int(packet[index])
+							if index+dsize > offset+2+size {
+								domain = ""
+								break
+							}
+							domain += string(packet[index+1:index+1+dsize]) + "."
+							index += 1 + dsize
+						}
+						if domain != "" {
+							value = strings.TrimSuffix(domain, ".")
+						}
+
+					case V4MODE_ROUTE4:
+						if ones := int(packet[index]); ones <= 32 {
+							length := ones / 8
+							if ones%8 != 0 {
+								length++
+							}
+							route := []byte{0, 0, 0, 0}
+							copy(route, packet[index+1:index+1+length])
+							if index+1+length+4 <= offset+2+size {
+								value = fmt.Sprintf(
+									"%d.%d.%d.%d/%d:%d.%d.%d.%d",
+									route[0], route[1], route[2], route[3], ones,
+									packet[index+1+length], packet[index+1+length+1], packet[index+1+length+2], packet[index+1+length+3],
+								)
+								index += 1 + length + 4
+							}
+						}
+
 					case V4MODE_MSGTYPE:
 						if msgtype := V4MSGTYPES[packet[index]]; msgtype == nil {
 							return nil, fmt.Errorf(`invalid message type 0x%02x`, packet[index])
 						} else {
 							value = msgtype.name
 						}
+
 					case V4MODE_OPTION:
 						if value = V4ROPTIONS[int(packet[index])]; value == "" {
 							value = fmt.Sprintf("%d", packet[index])
 						}
 					}
+
 					if value == nil {
 						return nil, fmt.Errorf(`invalid value for option "%s"`, name)
 					}
 					if option.mode&V4MODE_LIST != 0 {
 						index += option.multiple
-						frame[name] = append(frame[name].([]interface{}), value)
+						frame[name] = append(frame[name].([]any), value)
 					} else {
 						index += size
 						frame[name] = value
@@ -659,12 +717,12 @@ func v4build(frame FRAME) (packet []byte, err error) {
 			option = &V4OPTION{id, V4MODE_BINARY, 1, 0, 0}
 		}
 		if option == nil {
-			continue
+			return nil, fmt.Errorf(`unknown option "%s"`, name)
 		}
-		if _, ok := value.([]interface{}); !ok {
-			value = []interface{}{value}
+		if _, ok := value.([]any); !ok {
+			value = []any{value}
 		}
-		if option.mode&V4MODE_LIST == 0 && len(value.([]interface{})) > 1 {
+		if option.mode&V4MODE_LIST == 0 && len(value.([]any)) > 1 {
 			return nil, fmt.Errorf(`option "%s" is not a list of values`, name)
 		}
 
@@ -674,7 +732,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 
 		packet[offset] = byte(option.id)
 		size := 0
-		for _, item := range value.([]interface{}) {
+		for _, item := range value.([]any) {
 			if _, ok := item.(float64); ok {
 				item = int(item.(float64))
 			}
@@ -690,6 +748,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for binary option "%s"`, item, name)
 				}
+
 			case V4MODE_SBINARY:
 				if tvalue, ok := item.(string); ok && tvalue != "" {
 					if !rcache.Get(fmt.Sprintf(`^([0-9a-f][0-9a-f]:){0,%d}[0-9a-f][0-9a-f]$`, 253-size)).MatchString(tvalue) {
@@ -702,6 +761,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for separated-binary option "%s"`, item, name)
 				}
+
 			case V4MODE_INTEGER:
 				if tvalue, ok := item.(string); ok {
 					if tvalue, err := strconv.Atoi(tvalue); err == nil {
@@ -725,6 +785,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for integer option "%s"`, item, name)
 				}
+
 			case V4MODE_DINTEGER:
 				if tvalue, ok := item.(string); ok && tvalue != "" {
 					if !rcache.Get(fmt.Sprintf(`^(\d+\.){0,%d}\d+$`, 253-size)).MatchString(tvalue) {
@@ -739,6 +800,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for dotted-integer option "%s"`, item, name)
 				}
+
 			case V4MODE_BOOLEAN:
 				if tvalue, ok := item.(string); ok {
 					item = false
@@ -754,6 +816,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for boolean option "%s"`, item, name)
 				}
+
 			case V4MODE_STRING:
 				if tvalue, ok := item.(string); ok && tvalue != "" && len(tvalue) <= 254 {
 					copy(packet[offset+2+size:], tvalue)
@@ -761,6 +824,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for string option "%s"`, item, name)
 				}
+
 			case V4MODE_INET4:
 				if tvalue, ok := item.(string); ok {
 					if address := net.ParseIP(tvalue); address == nil || address.To4() == nil {
@@ -772,45 +836,98 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for inet4 option "%s"`, item, name)
 				}
+
 			case V4MODE_INET4PAIR:
 				if tvalue, ok := item.(string); ok {
-					if matcher := rcache.Get(`^((?:\d+\.){3}\d+):((?:\d+\.){3}\d+)$`); !matcher.MatchString(tvalue) {
-						return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
-					} else {
-						matches := matcher.FindStringSubmatch(tvalue)
-						if address1 := net.ParseIP(matches[1]); address1 == nil || address1.To4() == nil {
+					if captures := rcache.Get(`^((?:\d+\.){3}\d+):((?:\d+\.){3}\d+)$`).FindStringSubmatch(tvalue); captures != nil {
+						if address1 := net.ParseIP(captures[1]); address1 == nil || address1.To4() == nil {
 							return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
-						} else if address2 := net.ParseIP(matches[2]); address2 == nil || address2.To4() == nil {
+						} else if address2 := net.ParseIP(captures[2]); address2 == nil || address2.To4() == nil {
 							return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
 						} else {
 							copy(packet[offset+2+size:], address1.To4()[:4])
 							copy(packet[offset+2+size+4:], address2.To4()[:4])
 							size += 8
 						}
+					} else {
+						return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
 					}
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
 				}
+
 			case V4MODE_CIDR4:
 				if tvalue, ok := item.(string); ok {
-					if matcher := rcache.Get(`^((?:\d+\.){3}\d+)/(\d+)$`); !matcher.MatchString(tvalue) {
-						return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
-					} else {
-						matches := matcher.FindStringSubmatch(tvalue)
-						if address := net.ParseIP(matches[1]); address == nil || address.To4() == nil {
+					if captures := rcache.Get(`^((?:\d+\.){3}\d+)/(\d+)$`).FindStringSubmatch(tvalue); captures != nil {
+						if address := net.ParseIP(captures[1]); address == nil || address.To4() == nil {
 							return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
 						} else {
 							copy(packet[offset+2+size:], address.To4()[:4])
 							size += 4
-							ones, _ := strconv.Atoi(matches[2])
+							ones, _ := strconv.Atoi(captures[2])
 							mask := net.CIDRMask(ones, 32)
+							if mask == nil {
+								return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
+							}
 							copy(packet[offset+2+size:], mask[:4])
 							size += 4
 						}
+					} else {
+						return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
 					}
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
 				}
+
+			case V4MODE_DOMAIN:
+				if tvalue, ok := item.(string); ok && rcache.Get(`^[a-zA-Z]\.?([a-zA-Z0-9\-]+\.)*$`).MatchString(strings.Trim(tvalue, ".")+".") && len(tvalue) < 254 {
+					for _, part := range strings.Split(strings.Trim(tvalue, "."), ".") {
+						packet[offset+2+size] = byte(len(part))
+						copy(packet[offset+2+size+1:], part)
+						size += 1 + len(part)
+					}
+					packet[offset+2+size] = 0
+					size++
+				} else {
+					return nil, fmt.Errorf(`invalid format "%v" for domain option "%s"`, item, name)
+				}
+
+			case V4MODE_ROUTE4:
+				if tvalue, ok := item.(string); ok {
+					if matcher := rcache.Get(`^((?:\d+\.){3}\d+)/(\d+):((?:\d+\.){3}\d+)$`); !matcher.MatchString(tvalue) {
+						return nil, fmt.Errorf(`invalid format "%v" for route4 option "%s"`, item, name)
+					} else {
+						captures := matcher.FindStringSubmatch(tvalue)
+						ones, _ := strconv.Atoi(captures[2])
+						if ones < 0 || ones > 32 {
+							return nil, fmt.Errorf(`invalid format "%v" for route4 option "%s"`, item, name)
+						}
+						length := ones / 8
+						if ones%8 != 0 {
+							length++
+						}
+						packet[offset+2+size] = byte(ones)
+
+						address := net.ParseIP(captures[1])
+						if address == nil {
+							return nil, fmt.Errorf(`invalid format "%v" for route4 option "%s"`, item, name)
+						}
+						address = address.To4()
+						copy(packet[offset+2+size+1:], address[:length])
+
+						address = net.ParseIP(captures[3])
+						if address == nil {
+							return nil, fmt.Errorf(`invalid format "%v" for route4 option "%s"`, item, name)
+						}
+						address = address.To4()
+						copy(packet[offset+2+size+1+length:], address)
+
+						size += 1 + length + 4
+					}
+				} else {
+					return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
+				}
+
 			case V4MODE_MSGTYPE:
 				if tvalue, ok := item.(string); ok && V4RMSGTYPES[tvalue] != 0 {
 					packet[offset+2+size] = V4RMSGTYPES[tvalue]
@@ -818,6 +935,7 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				} else {
 					return nil, fmt.Errorf(`invalid message type "%v"`, item)
 				}
+
 			case V4MODE_OPTION:
 				if tvalue, ok := item.(string); ok {
 					if option := V4OPTIONS[tvalue]; option != nil {
@@ -834,8 +952,13 @@ func v4build(frame FRAME) (packet []byte, err error) {
 				} else {
 					return nil, fmt.Errorf(`invalid format "%v" for option "%s"`, item, name)
 				}
+
 			default:
 				return nil, fmt.Errorf(`unknow type %d for option "%s"`, option.mode&V4MODE_MASK, name)
+			}
+			if size > 255 {
+				fmt.Printf("break b/c single option size is already > 255\n")
+				break
 			}
 		}
 		if (option.min != 0 && size < option.min) || (option.max != 0 && size > option.max) || size > 255 {
@@ -843,6 +966,9 @@ func v4build(frame FRAME) (packet []byte, err error) {
 		}
 		packet[offset+1] = byte(size)
 		offset += 2 + size
+		if offset > len(packet)-255 {
+			return nil, fmt.Errorf(`oversized packet`)
+		}
 	}
 	packet[offset] = 0xff
 	offset++
