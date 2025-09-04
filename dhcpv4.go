@@ -4,30 +4,33 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 
+	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ustr"
 )
 
+type V4MSGTYPE struct {
+	name    string
+	opcode  byte
+	request byte
+}
 type V4HWTYPE struct {
 	name   string
 	length int
 }
 type V4OPTION struct {
-	id       int
-	mode     int
-	min      int
-	max      int
-	multiple int
-}
-type V4MSGTYPE struct {
-	name    string
-	opcode  byte
-	request byte
+	id   int
+	mode int
+	min  int
+	max  int
+	step int
 }
 
 const (
@@ -42,13 +45,56 @@ const (
 	V4MODE_INET4     = 9
 	V4MODE_INET4PAIR = 10
 	V4MODE_CIDR4     = 11
-	V4MODE_MSGTYPE   = 12
-	V4MODE_OPTION    = 13
+	V4MODE_DOMAIN    = 12
+	V4MODE_ROUTE4    = 13
+	V4MODE_MSGTYPE   = 14
+	V4MODE_OPTION    = 15
 	V4MODE_MASK      = 0x7f
 	V4MODE_LIST      = 0x80
+	FLAG_CLIENTONLY  = 0x01
 )
 
 var (
+	V4OPCODES = map[byte]string{
+		1: "request",
+		2: "reply",
+	}
+
+	V4RMSGTYPES = map[string]byte{}
+	V4MSGTYPES  = map[byte]*V4MSGTYPE{
+		1:  &V4MSGTYPE{name: "discover", opcode: 1},
+		2:  &V4MSGTYPE{name: "offer", opcode: 2, request: 1},
+		3:  &V4MSGTYPE{name: "request", opcode: 1},
+		4:  &V4MSGTYPE{name: "decline", opcode: 1},
+		5:  &V4MSGTYPE{name: "ack", opcode: 2, request: 3},
+		6:  &V4MSGTYPE{name: "nak", opcode: 2, request: 3},
+		7:  &V4MSGTYPE{name: "release", opcode: 1},
+		8:  &V4MSGTYPE{name: "inform", opcode: 1},
+		9:  &V4MSGTYPE{name: "forcerenew", opcode: 1},
+		10: &V4MSGTYPE{name: "leasequery", opcode: 1},
+		11: &V4MSGTYPE{name: "leaseunassigned", opcode: 2, request: 10},
+		12: &V4MSGTYPE{name: "leaseunknown", opcode: 2, request: 10},
+		13: &V4MSGTYPE{name: "leaseactive", opcode: 2, request: 10},
+		14: &V4MSGTYPE{name: "bulkleasequery", opcode: 1},
+		15: &V4MSGTYPE{name: "leasequerydone", opcode: 2, request: 14},
+	}
+
+	V4RHWTYPES = map[string]byte{}
+	V4HWTYPES  = map[byte]*V4HWTYPE{
+		1:  &V4HWTYPE{name: "ethernet", length: 6},
+		6:  &V4HWTYPE{name: "ieee-802"},
+		7:  &V4HWTYPE{name: "arcnet"},
+		11: &V4HWTYPE{name: "localtalk"},
+		12: &V4HWTYPE{name: "localnet"},
+		14: &V4HWTYPE{name: "smds"},
+		15: &V4HWTYPE{name: "frame-relay"},
+		16: &V4HWTYPE{name: "atm"},
+		17: &V4HWTYPE{name: "hdlc"},
+		18: &V4HWTYPE{name: "fiber-channel"},
+		19: &V4HWTYPE{name: "atm"},
+		20: &V4HWTYPE{name: "serial"},
+	}
+
 	V4MODE_NAMES = map[int]string{
 		V4MODE_OPCODE:    "opcode",
 		V4MODE_HWTYPE:    "hwtype",
@@ -61,228 +107,193 @@ var (
 		V4MODE_INET4:     "inet4",
 		V4MODE_INET4PAIR: "inet4pair",
 		V4MODE_CIDR4:     "cidr4",
+		V4MODE_ROUTE4:    "route4",
+		V4MODE_DOMAIN:    "domain",
 		V4MODE_MSGTYPE:   "msgtype",
 		V4MODE_OPTION:    "option",
 	}
-	V4OPCODES = map[byte]string{
-		1: "request",
-		2: "reply",
-	}
-	V4HWTYPES = map[byte]*V4HWTYPE{
-		1:  &V4HWTYPE{"ethernet", 6},
-		6:  &V4HWTYPE{"ieee-802", 0},
-		7:  &V4HWTYPE{"arcnet", 0},
-		11: &V4HWTYPE{"localtalk", 0},
-		12: &V4HWTYPE{"localnet", 0},
-		14: &V4HWTYPE{"smds", 0},
-		15: &V4HWTYPE{"frame-relay", 0},
-		16: &V4HWTYPE{"atm", 0},
-		17: &V4HWTYPE{"hdlc", 0},
-		18: &V4HWTYPE{"fiber-channel", 0},
-		19: &V4HWTYPE{"atm", 0},
-		20: &V4HWTYPE{"serial", 0},
-	}
-	V4RHWTYPES = map[string]byte{}
-	V4MSGTYPES = map[byte]*V4MSGTYPE{
-		1:  &V4MSGTYPE{"discover", 1, 0},
-		2:  &V4MSGTYPE{"offer", 2, 1},
-		3:  &V4MSGTYPE{"request", 1, 0},
-		4:  &V4MSGTYPE{"decline", 1, 0},
-		5:  &V4MSGTYPE{"ack", 2, 3},
-		6:  &V4MSGTYPE{"nak", 2, 3},
-		7:  &V4MSGTYPE{"release", 1, 0},
-		8:  &V4MSGTYPE{"inform", 1, 0},
-		9:  &V4MSGTYPE{"forcerenew", 1, 0},
-		10: &V4MSGTYPE{"leasequery", 1, 0},
-		11: &V4MSGTYPE{"leaseunassigned", 2, 10},
-		12: &V4MSGTYPE{"leaseunknown", 2, 10},
-		13: &V4MSGTYPE{"leaseactive", 2, 10},
-		14: &V4MSGTYPE{"bulkleasequery", 1, 0},
-		15: &V4MSGTYPE{"leasequerydone", 2, 14},
-	}
-	V4RMSGTYPES = map[string]byte{}
-	V4OPTIONS   = map[string]*V4OPTION{
-		"bootp-opcode":                       &V4OPTION{-14, V4MODE_OPCODE, 1, 1, 0},
-		"bootp-hardware-type":                &V4OPTION{-13, V4MODE_HWTYPE, 1, 1, 0},
-		"bootp-hardware-length":              &V4OPTION{-12, V4MODE_INTEGER, 1, 1, 0},
-		"bootp-relay-hops":                   &V4OPTION{-11, V4MODE_INTEGER, 1, 1, 0},
-		"bootp-transaction-id":               &V4OPTION{-10, V4MODE_BINARY, 1, 1, 0},
-		"bootp-start-time":                   &V4OPTION{-9, V4MODE_INTEGER, 2, 2, 0},
-		"bootp-broadcast":                    &V4OPTION{-8, V4MODE_BOOLEAN, 2, 2, 0},
-		"bootp-client-address":               &V4OPTION{-7, V4MODE_INET4, 4, 4, 0},
-		"bootp-assigned-address":             &V4OPTION{-6, V4MODE_INET4, 4, 4, 0},
-		"bootp-server-address":               &V4OPTION{-5, V4MODE_INET4, 4, 4, 0},
-		"bootp-relay-address":                &V4OPTION{-4, V4MODE_INET4, 4, 4, 0},
-		"client-hardware-address":            &V4OPTION{-3, V4MODE_SBINARY, 6, 6, 0},
-		"bootp-server-name":                  &V4OPTION{-2, V4MODE_STRING, 1, 63, 0},
-		"bootp-filename":                     &V4OPTION{-1, V4MODE_STRING, 1, 127, 0},
-		"subnet-mask":                        &V4OPTION{1, V4MODE_INET4, 4, 4, 0},
-		"time-offset":                        &V4OPTION{2, V4MODE_INTEGER, 4, 4, 0},
-		"routers":                            &V4OPTION{3, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"time-servers":                       &V4OPTION{4, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"name-servers":                       &V4OPTION{5, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"domain-name-servers":                &V4OPTION{6, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"log-servers":                        &V4OPTION{7, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"cookie-servers":                     &V4OPTION{8, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"lpr-servers":                        &V4OPTION{9, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"impress-servers":                    &V4OPTION{10, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"resource-location-servers":          &V4OPTION{11, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"hostname":                           &V4OPTION{12, V4MODE_STRING, 1, 0, 0},
-		"boot-file-size":                     &V4OPTION{13, V4MODE_INTEGER, 2, 2, 0},
-		"merit-dump-file":                    &V4OPTION{14, V4MODE_STRING, 1, 0, 0},
-		"domain-name":                        &V4OPTION{15, V4MODE_STRING, 1, 0, 0},
-		"swap-server":                        &V4OPTION{16, V4MODE_INET4, 4, 4, 0},
-		"root-path":                          &V4OPTION{17, V4MODE_STRING, 1, 0, 0},
-		"extensions-path":                    &V4OPTION{18, V4MODE_STRING, 1, 0, 0},
-		"ip-forwarding":                      &V4OPTION{19, V4MODE_BOOLEAN, 1, 1, 0},
-		"non-local-source-routing":           &V4OPTION{20, V4MODE_BOOLEAN, 1, 1, 0},
-		"policy-filters":                     &V4OPTION{21, V4MODE_CIDR4 | V4MODE_LIST, 8, 0, 8},
-		"maximum-datagram-reassembly-size":   &V4OPTION{22, V4MODE_INTEGER, 2, 2, 0},
-		"ip-default-ttl":                     &V4OPTION{23, V4MODE_INTEGER, 1, 1, 0},
-		"path-mtu-aging-timeout":             &V4OPTION{24, V4MODE_INTEGER, 4, 4, 0},
-		"path-mtu-plateau-table":             &V4OPTION{25, V4MODE_INTEGER | V4MODE_LIST, 2, 0, 2},
-		"interface-mtu":                      &V4OPTION{26, V4MODE_INTEGER, 2, 2, 0},
-		"all-subnets-local":                  &V4OPTION{27, V4MODE_BOOLEAN, 1, 1, 0},
-		"broadcast-address":                  &V4OPTION{28, V4MODE_INET4, 4, 4, 0},
-		"perform-mask-discovery":             &V4OPTION{29, V4MODE_BOOLEAN, 1, 1, 0},
-		"mask-supplier":                      &V4OPTION{30, V4MODE_BOOLEAN, 1, 1, 0},
-		"perform-router-discovery":           &V4OPTION{31, V4MODE_BOOLEAN, 1, 1, 0},
-		"router-solicitation-address":        &V4OPTION{32, V4MODE_INET4, 4, 4, 0},
-		"static-routes":                      &V4OPTION{33, V4MODE_INET4PAIR | V4MODE_LIST, 8, 0, 8},
-		"trailer-encapsulation":              &V4OPTION{34, V4MODE_BOOLEAN, 1, 1, 0},
-		"arp-cache-timeout":                  &V4OPTION{35, V4MODE_INTEGER, 4, 4, 0},
-		"ethernet-encapsulation":             &V4OPTION{36, V4MODE_BOOLEAN, 1, 1, 0},
-		"tcp-default-ttl":                    &V4OPTION{37, V4MODE_INTEGER, 1, 1, 0},
-		"tcp-keepalive-interval":             &V4OPTION{38, V4MODE_INTEGER, 4, 4, 0},
-		"tcp-keepalive-garbage":              &V4OPTION{39, V4MODE_BOOLEAN, 1, 1, 0},
-		"nis-domain":                         &V4OPTION{40, V4MODE_STRING, 1, 0, 0},
-		"nis-servers":                        &V4OPTION{41, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"ntp-servers":                        &V4OPTION{42, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"vendor-specific-information":        &V4OPTION{43, V4MODE_BINARY, 1, 0, 0},
-		"netbios-name-servers":               &V4OPTION{44, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"netbios-dgram-distribution-servers": &V4OPTION{45, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"netbios-node-type":                  &V4OPTION{46, V4MODE_INTEGER, 1, 1, 0},
-		"netbios-scope":                      &V4OPTION{47, V4MODE_STRING, 1, 0, 0},
-		"xwindow-font-servers":               &V4OPTION{48, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"xwindow-display-managers":           &V4OPTION{49, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"requested-ip-address":               &V4OPTION{50, V4MODE_INET4, 4, 4, 0},
-		"address-lease-time":                 &V4OPTION{51, V4MODE_INTEGER, 4, 4, 0},
-		"option-overload":                    &V4OPTION{52, V4MODE_INTEGER, 1, 1, 0},
-		"dhcp-message-type":                  &V4OPTION{53, V4MODE_MSGTYPE, 1, 1, 0},
-		"server-identifier":                  &V4OPTION{54, V4MODE_INET4, 4, 4, 0},
-		"parameters-request-list":            &V4OPTION{55, V4MODE_OPTION | V4MODE_LIST, 1, 0, 1},
-		"message":                            &V4OPTION{56, V4MODE_STRING, 1, 0, 0},
-		"max-message-size":                   &V4OPTION{57, V4MODE_INTEGER, 2, 2, 0},
-		"renewal-time":                       &V4OPTION{58, V4MODE_INTEGER, 4, 4, 0},
-		"rebinding-time":                     &V4OPTION{59, V4MODE_INTEGER, 4, 4, 0},
-		"vendor-class-identifier":            &V4OPTION{60, V4MODE_STRING, 1, 0, 0},
-		"client-identifier":                  &V4OPTION{61, V4MODE_BINARY, 2, 0, 0},
-		"netware-domain":                     &V4OPTION{62, V4MODE_STRING, 1, 0, 0},
-		"netware-option":                     &V4OPTION{63, V4MODE_BINARY, 1, 0, 0},
-		"nisplus-domain":                     &V4OPTION{64, V4MODE_STRING, 1, 0, 0},
-		"nisplus-servers":                    &V4OPTION{65, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"tftp-server-name":                   &V4OPTION{66, V4MODE_STRING, 1, 0, 0},
-		"boot-filename":                      &V4OPTION{67, V4MODE_STRING, 1, 0, 0},
-		"mobile-ip-home-agents":              &V4OPTION{68, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"smtp-servers":                       &V4OPTION{69, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"pop3-servers":                       &V4OPTION{70, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"nntp-servers":                       &V4OPTION{71, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"www-servers":                        &V4OPTION{72, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"finger-servers":                     &V4OPTION{73, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"irc-servers":                        &V4OPTION{74, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"streettalk-servers":                 &V4OPTION{75, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"streettalk-directory-servers":       &V4OPTION{76, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"user-class":                         &V4OPTION{77, V4MODE_STRING, 1, 0, 0},
-		"directory-agent":                    &V4OPTION{78, V4MODE_BINARY, 1, 0, 0},
-		"service-scope":                      &V4OPTION{79, V4MODE_BINARY, 1, 0, 0},
-		"client-fqdn":                        &V4OPTION{81, V4MODE_BINARY, 1, 0, 0},
-		"relay-agent-information":            &V4OPTION{82, V4MODE_BINARY, 1, 0, 0},
-		"isns-configuration":                 &V4OPTION{83, V4MODE_BINARY, 1, 0, 0},
-		"nds-servers":                        &V4OPTION{85, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"nds-tree-name":                      &V4OPTION{86, V4MODE_STRING, 1, 0, 0},
-		"nds-context":                        &V4OPTION{87, V4MODE_STRING, 1, 0, 0},
-		"bcmcs-domain":                       &V4OPTION{88, V4MODE_STRING, 1, 0, 0},
-		"bcmcs-servers":                      &V4OPTION{89, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"authentication":                     &V4OPTION{90, V4MODE_BINARY, 3, 0, 0},
-		"last-transaction-time":              &V4OPTION{91, V4MODE_INTEGER, 4, 4, 0},
-		"associated-addresses":               &V4OPTION{92, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"client-system":                      &V4OPTION{93, V4MODE_INTEGER, 2, 2, 0},
-		"client-ndi":                         &V4OPTION{94, V4MODE_DINTEGER, 3, 3, 0},
-		"client-guid":                        &V4OPTION{97, V4MODE_BINARY, 1, 0, 0},
-		"user-authentication":                &V4OPTION{98, V4MODE_STRING, 1, 0, 0},
-		"geoconf-civic":                      &V4OPTION{99, V4MODE_BINARY, 1, 0, 0},
-		"tz-posix":                           &V4OPTION{100, V4MODE_STRING, 1, 0, 0},
-		"tz-database":                        &V4OPTION{101, V4MODE_STRING, 1, 0, 0},
-		"auto-configuration":                 &V4OPTION{116, V4MODE_INTEGER, 1, 1, 0},
-		"name-service-search":                &V4OPTION{117, V4MODE_INTEGER | V4MODE_LIST, 2, 0, 2},
-		"subnet-selection":                   &V4OPTION{118, V4MODE_INET4, 4, 4, 0},
-		"domain-search":                      &V4OPTION{119, V4MODE_STRING, 1, 0, 0},
-		"sip-server":                         &V4OPTION{120, V4MODE_BINARY, 1, 0, 0},
-		"classless-route":                    &V4OPTION{121, V4MODE_BINARY, 1, 0, 0},
-		"cablelabs-configuration":            &V4OPTION{122, V4MODE_BINARY, 1, 0, 0},
-		"geoconf":                            &V4OPTION{123, V4MODE_BINARY, 1, 0, 0},
-		"vi-vendor-class":                    &V4OPTION{124, V4MODE_BINARY, 1, 0, 0},
-		"vi-vendor-specific-information":     &V4OPTION{125, V4MODE_BINARY, 1, 0, 0},
-		"pana-agents":                        &V4OPTION{136, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"v4-lost":                            &V4OPTION{137, V4MODE_STRING, 1, 0, 0},
-		"v4-capwap-access-controller":        &V4OPTION{138, V4MODE_BINARY, 1, 0, 0},
-		"v4-address-mos":                     &V4OPTION{139, V4MODE_BINARY, 1, 0, 0},
-		"v4-fqdn-mos":                        &V4OPTION{140, V4MODE_BINARY, 1, 0, 0},
-		"sip-ua-domain":                      &V4OPTION{141, V4MODE_STRING, 1, 0, 0},
-		"v4-address-andsf":                   &V4OPTION{142, V4MODE_BINARY, 1, 0, 0},
-		"v4-geoloc":                          &V4OPTION{144, V4MODE_BINARY, 1, 0, 0},
-		"forcerenew-nonce-capable":           &V4OPTION{145, V4MODE_BINARY, 1, 0, 0},
-		"rdnss-selection":                    &V4OPTION{146, V4MODE_BINARY, 1, 0, 0},
-		"tftp-servers":                       &V4OPTION{150, V4MODE_INET4 | V4MODE_LIST, 4, 0, 4},
-		"status-code":                        &V4OPTION{151, V4MODE_STRING, 1, 0, 0},
-		"base-time":                          &V4OPTION{152, V4MODE_INTEGER, 4, 4, 0},
-		"start-time-of-state":                &V4OPTION{153, V4MODE_INTEGER, 4, 4, 0},
-		"query-start-time":                   &V4OPTION{154, V4MODE_INTEGER, 4, 4, 0},
-		"query-end-time":                     &V4OPTION{155, V4MODE_INTEGER, 4, 4, 0},
-		"dhcp-state":                         &V4OPTION{156, V4MODE_INTEGER, 1, 1, 0},
-		"data-source":                        &V4OPTION{157, V4MODE_INTEGER, 1, 1, 0},
-		"v4-pcp-server":                      &V4OPTION{158, V4MODE_BINARY, 5, 0, 0},
-		"pxelinux-magic":                     &V4OPTION{208, V4MODE_BINARY, 4, 4, 0},
-		"configuration-file":                 &V4OPTION{209, V4MODE_STRING, 1, 0, 0},
-		"path-prefix":                        &V4OPTION{210, V4MODE_STRING, 1, 0, 0},
-		"reboot-time":                        &V4OPTION{211, V4MODE_INTEGER, 4, 4, 0},
-		"v6-6rd":                             &V4OPTION{212, V4MODE_BINARY, 1, 0, 0},
-		"v4-access-domain":                   &V4OPTION{213, V4MODE_STRING, 1, 0, 0},
-		"subnet-allocation":                  &V4OPTION{220, V4MODE_BINARY, 1, 0, 0},
-		"virtual-subnet-allocation":          &V4OPTION{221, V4MODE_BINARY, 1, 0, 0},
-		"private-01":                         &V4OPTION{224, V4MODE_BINARY, 1, 0, 0},
-		"private-02":                         &V4OPTION{225, V4MODE_BINARY, 1, 0, 0},
-		"private-03":                         &V4OPTION{226, V4MODE_BINARY, 1, 0, 0},
-		"private-04":                         &V4OPTION{227, V4MODE_BINARY, 1, 0, 0},
-		"private-05":                         &V4OPTION{228, V4MODE_BINARY, 1, 0, 0},
-		"private-06":                         &V4OPTION{229, V4MODE_BINARY, 1, 0, 0},
-		"private-07":                         &V4OPTION{230, V4MODE_BINARY, 1, 0, 0},
-		"private-08":                         &V4OPTION{231, V4MODE_BINARY, 1, 0, 0},
-		"private-09":                         &V4OPTION{232, V4MODE_BINARY, 1, 0, 0},
-		"private-10":                         &V4OPTION{233, V4MODE_BINARY, 1, 0, 0},
-		"private-11":                         &V4OPTION{234, V4MODE_BINARY, 1, 0, 0},
-		"private-12":                         &V4OPTION{235, V4MODE_BINARY, 1, 0, 0},
-		"private-13":                         &V4OPTION{236, V4MODE_BINARY, 1, 0, 0},
-		"private-14":                         &V4OPTION{237, V4MODE_BINARY, 1, 0, 0},
-		"private-15":                         &V4OPTION{238, V4MODE_BINARY, 1, 0, 0},
-		"private-16":                         &V4OPTION{239, V4MODE_BINARY, 1, 0, 0},
-		"private-17":                         &V4OPTION{240, V4MODE_BINARY, 1, 0, 0},
-		"private-18":                         &V4OPTION{241, V4MODE_BINARY, 1, 0, 0},
-		"private-19":                         &V4OPTION{242, V4MODE_BINARY, 1, 0, 0},
-		"private-20":                         &V4OPTION{243, V4MODE_BINARY, 1, 0, 0},
-		"private-21":                         &V4OPTION{244, V4MODE_BINARY, 1, 0, 0},
-		"private-22":                         &V4OPTION{245, V4MODE_BINARY, 1, 0, 0},
-		"private-23":                         &V4OPTION{246, V4MODE_BINARY, 1, 0, 0},
-		"private-24":                         &V4OPTION{247, V4MODE_BINARY, 1, 0, 0},
-		"private-25":                         &V4OPTION{248, V4MODE_BINARY, 1, 0, 0},
-		"private-26":                         &V4OPTION{249, V4MODE_BINARY, 1, 0, 0},
-		"private-27":                         &V4OPTION{250, V4MODE_BINARY, 1, 0, 0},
-		"private-28":                         &V4OPTION{251, V4MODE_BINARY, 1, 0, 0},
-		"private-29":                         &V4OPTION{252, V4MODE_BINARY, 1, 0, 0},
-		"private-30":                         &V4OPTION{253, V4MODE_BINARY, 1, 0, 0},
-		"private-31":                         &V4OPTION{254, V4MODE_BINARY, 1, 0, 0},
-	}
 	V4ROPTIONS = map[int]string{}
+	V4OPTIONS  = map[string]*V4OPTION{
+		"bootp-opcode":                       &V4OPTION{id: -14, mode: V4MODE_OPCODE, min: 1, max: 1},
+		"bootp-hardware-type":                &V4OPTION{id: -13, mode: V4MODE_HWTYPE, min: 1, max: 1},
+		"bootp-hardware-length":              &V4OPTION{id: -12, mode: V4MODE_INTEGER, min: 1, max: 1},
+		"bootp-relay-hops":                   &V4OPTION{id: -11, mode: V4MODE_INTEGER, min: 1, max: 1},
+		"bootp-transaction-id":               &V4OPTION{id: -10, mode: V4MODE_BINARY, min: 1, max: 1},
+		"bootp-start-time":                   &V4OPTION{id: -9, mode: V4MODE_INTEGER, min: 2, max: 2},
+		"bootp-broadcast":                    &V4OPTION{id: -8, mode: V4MODE_BOOLEAN, min: 2, max: 2},
+		"bootp-client-address":               &V4OPTION{id: -7, mode: V4MODE_INET4, min: 4, max: 4},
+		"bootp-assigned-address":             &V4OPTION{id: -6, mode: V4MODE_INET4, min: 4, max: 4},
+		"bootp-server-address":               &V4OPTION{id: -5, mode: V4MODE_INET4, min: 4, max: 4},
+		"bootp-relay-address":                &V4OPTION{id: -4, mode: V4MODE_INET4, min: 4, max: 4},
+		"client-hardware-address":            &V4OPTION{id: -3, mode: V4MODE_SBINARY, min: 6, max: 6},
+		"bootp-server-name":                  &V4OPTION{id: -2, mode: V4MODE_STRING, min: 1, max: 63},
+		"bootp-filename":                     &V4OPTION{id: -1, mode: V4MODE_STRING, min: 1, max: 127},
+		"subnet-mask":                        &V4OPTION{id: 1, mode: V4MODE_INET4, min: 4, max: 4},
+		"time-offset":                        &V4OPTION{id: 2, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"routers":                            &V4OPTION{id: 3, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"time-servers":                       &V4OPTION{id: 4, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"name-servers":                       &V4OPTION{id: 5, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"domain-name-servers":                &V4OPTION{id: 6, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"log-servers":                        &V4OPTION{id: 7, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"cookie-servers":                     &V4OPTION{id: 8, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"lpr-servers":                        &V4OPTION{id: 9, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"impress-servers":                    &V4OPTION{id: 10, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"resource-location-servers":          &V4OPTION{id: 11, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"hostname":                           &V4OPTION{id: 12, mode: V4MODE_STRING, min: 1},
+		"boot-file-size":                     &V4OPTION{id: 13, mode: V4MODE_INTEGER, min: 2, max: 2},
+		"merit-dump-file":                    &V4OPTION{id: 14, mode: V4MODE_STRING, min: 1},
+		"domain-name":                        &V4OPTION{id: 15, mode: V4MODE_STRING, min: 1},
+		"swap-server":                        &V4OPTION{id: 16, mode: V4MODE_INET4, min: 4, max: 4},
+		"root-path":                          &V4OPTION{id: 17, mode: V4MODE_STRING, min: 1},
+		"extensions-path":                    &V4OPTION{id: 18, mode: V4MODE_STRING, min: 1},
+		"ip-forwarding":                      &V4OPTION{id: 19, mode: V4MODE_BOOLEAN, min: 1, max: 1},
+		"non-local-source-routing":           &V4OPTION{id: 20, mode: V4MODE_BOOLEAN, min: 1, max: 1},
+		"policy-filters":                     &V4OPTION{id: 21, mode: V4MODE_CIDR4 | V4MODE_LIST, min: 8, step: 8},
+		"maximum-datagram-reassembly-size":   &V4OPTION{id: 22, mode: V4MODE_INTEGER, min: 2, max: 2},
+		"ip-default-ttl":                     &V4OPTION{id: 23, mode: V4MODE_INTEGER, min: 1, max: 1},
+		"path-mtu-aging-timeout":             &V4OPTION{id: 24, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"path-mtu-plateau-table":             &V4OPTION{id: 25, mode: V4MODE_INTEGER | V4MODE_LIST, min: 2, step: 2},
+		"interface-mtu":                      &V4OPTION{id: 26, mode: V4MODE_INTEGER, min: 2, max: 2},
+		"all-subnets-local":                  &V4OPTION{id: 27, mode: V4MODE_BOOLEAN, min: 1, max: 1},
+		"broadcast-address":                  &V4OPTION{id: 28, mode: V4MODE_INET4, min: 4, max: 4},
+		"perform-mask-discovery":             &V4OPTION{id: 29, mode: V4MODE_BOOLEAN, min: 1, max: 1},
+		"mask-supplier":                      &V4OPTION{id: 30, mode: V4MODE_BOOLEAN, min: 1, max: 1},
+		"perform-router-discovery":           &V4OPTION{id: 31, mode: V4MODE_BOOLEAN, min: 1, max: 1},
+		"router-solicitation-address":        &V4OPTION{id: 32, mode: V4MODE_INET4, min: 4, max: 4},
+		"static-routes":                      &V4OPTION{id: 33, mode: V4MODE_INET4PAIR | V4MODE_LIST, min: 8, step: 8},
+		"trailer-encapsulation":              &V4OPTION{id: 34, mode: V4MODE_BOOLEAN, min: 1, max: 1},
+		"arp-cache-timeout":                  &V4OPTION{id: 35, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"ethernet-encapsulation":             &V4OPTION{id: 36, mode: V4MODE_BOOLEAN, min: 1, max: 1},
+		"tcp-default-ttl":                    &V4OPTION{id: 37, mode: V4MODE_INTEGER, min: 1, max: 1},
+		"tcp-keepalive-interval":             &V4OPTION{id: 38, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"tcp-keepalive-garbage":              &V4OPTION{id: 39, mode: V4MODE_BOOLEAN, min: 1, max: 1},
+		"nis-domain":                         &V4OPTION{id: 40, mode: V4MODE_STRING, min: 1},
+		"nis-servers":                        &V4OPTION{id: 41, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"ntp-servers":                        &V4OPTION{id: 42, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"vendor-specific-information":        &V4OPTION{id: 43, mode: V4MODE_BINARY, min: 1},
+		"netbios-name-servers":               &V4OPTION{id: 44, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"netbios-dgram-distribution-servers": &V4OPTION{id: 45, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"netbios-node-type":                  &V4OPTION{id: 46, mode: V4MODE_INTEGER, min: 1, max: 1},
+		"netbios-scope":                      &V4OPTION{id: 47, mode: V4MODE_STRING, min: 1},
+		"xwindow-font-servers":               &V4OPTION{id: 48, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"xwindow-display-managers":           &V4OPTION{id: 49, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"requested-ip-address":               &V4OPTION{id: 50, mode: V4MODE_INET4, min: 4, max: 4},
+		"address-lease-time":                 &V4OPTION{id: 51, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"option-overload":                    &V4OPTION{id: 52, mode: V4MODE_INTEGER, min: 1, max: 1},
+		"dhcp-message-type":                  &V4OPTION{id: 53, mode: V4MODE_MSGTYPE, min: 1, max: 1},
+		"server-identifier":                  &V4OPTION{id: 54, mode: V4MODE_INET4, min: 4, max: 4},
+		"parameters-request-list":            &V4OPTION{id: 55, mode: V4MODE_OPTION | V4MODE_LIST, min: 1, step: 1},
+		"message":                            &V4OPTION{id: 56, mode: V4MODE_STRING, min: 1},
+		"max-message-size":                   &V4OPTION{id: 57, mode: V4MODE_INTEGER, min: 2, max: 2},
+		"renewal-time":                       &V4OPTION{id: 58, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"rebinding-time":                     &V4OPTION{id: 59, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"vendor-class-identifier":            &V4OPTION{id: 60, mode: V4MODE_STRING, min: 1},
+		"client-identifier":                  &V4OPTION{id: 61, mode: V4MODE_BINARY, min: 2},
+		"netware-domain":                     &V4OPTION{id: 62, mode: V4MODE_STRING, min: 1},
+		"netware-option":                     &V4OPTION{id: 63, mode: V4MODE_BINARY, min: 1},
+		"nisplus-domain":                     &V4OPTION{id: 64, mode: V4MODE_STRING, min: 1},
+		"nisplus-servers":                    &V4OPTION{id: 65, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"tftp-server-name":                   &V4OPTION{id: 66, mode: V4MODE_STRING, min: 1},
+		"boot-filename":                      &V4OPTION{id: 67, mode: V4MODE_STRING, min: 1},
+		"mobile-ip-home-agents":              &V4OPTION{id: 68, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"smtp-servers":                       &V4OPTION{id: 69, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"pop3-servers":                       &V4OPTION{id: 70, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"nntp-servers":                       &V4OPTION{id: 71, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"www-servers":                        &V4OPTION{id: 72, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"finger-servers":                     &V4OPTION{id: 73, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"irc-servers":                        &V4OPTION{id: 74, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"streettalk-servers":                 &V4OPTION{id: 75, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"streettalk-directory-servers":       &V4OPTION{id: 76, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"user-class":                         &V4OPTION{id: 77, mode: V4MODE_STRING, min: 1},
+		"directory-agent":                    &V4OPTION{id: 78, mode: V4MODE_BINARY, min: 1},
+		"service-scope":                      &V4OPTION{id: 79, mode: V4MODE_BINARY, min: 1},
+		"client-fqdn":                        &V4OPTION{id: 81, mode: V4MODE_BINARY, min: 1},
+		"relay-agent-information":            &V4OPTION{id: 82, mode: V4MODE_BINARY, min: 1},
+		"isns-configuration":                 &V4OPTION{id: 83, mode: V4MODE_BINARY, min: 1},
+		"nds-servers":                        &V4OPTION{id: 85, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"nds-tree-name":                      &V4OPTION{id: 86, mode: V4MODE_STRING, min: 1},
+		"nds-context":                        &V4OPTION{id: 87, mode: V4MODE_STRING, min: 1},
+		"bcmcs-domain":                       &V4OPTION{id: 88, mode: V4MODE_STRING, min: 1},
+		"bcmcs-servers":                      &V4OPTION{id: 89, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"authentication":                     &V4OPTION{id: 90, mode: V4MODE_BINARY, min: 3},
+		"last-transaction-time":              &V4OPTION{id: 91, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"associated-addresses":               &V4OPTION{id: 92, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"client-system":                      &V4OPTION{id: 93, mode: V4MODE_INTEGER, min: 2, max: 2},
+		"client-ndi":                         &V4OPTION{id: 94, mode: V4MODE_DINTEGER, min: 3, max: 3},
+		"client-guid":                        &V4OPTION{id: 97, mode: V4MODE_BINARY, min: 1},
+		"user-authentication":                &V4OPTION{id: 98, mode: V4MODE_STRING, min: 1},
+		"geoconf-civic":                      &V4OPTION{id: 99, mode: V4MODE_BINARY, min: 1},
+		"tz-posix":                           &V4OPTION{id: 100, mode: V4MODE_STRING, min: 1},
+		"tz-database":                        &V4OPTION{id: 101, mode: V4MODE_STRING, min: 1},
+		"auto-configuration":                 &V4OPTION{id: 116, mode: V4MODE_INTEGER, min: 1, max: 1},
+		"name-service-search":                &V4OPTION{id: 117, mode: V4MODE_INTEGER | V4MODE_LIST, min: 2, step: 2},
+		"subnet-selection":                   &V4OPTION{id: 118, mode: V4MODE_INET4, min: 4, max: 4},
+		"domain-search":                      &V4OPTION{id: 119, mode: V4MODE_DOMAIN | V4MODE_LIST, min: 1},
+		"sip-server":                         &V4OPTION{id: 120, mode: V4MODE_BINARY, min: 1},
+		"classless-route":                    &V4OPTION{id: 121, mode: V4MODE_ROUTE4 | V4MODE_LIST, min: 5},
+		"cablelabs-configuration":            &V4OPTION{id: 122, mode: V4MODE_BINARY, min: 1},
+		"geoconf":                            &V4OPTION{id: 123, mode: V4MODE_BINARY, min: 1},
+		"vi-vendor-class":                    &V4OPTION{id: 124, mode: V4MODE_BINARY, min: 1},
+		"vi-vendor-specific-information":     &V4OPTION{id: 125, mode: V4MODE_BINARY, min: 1},
+		"pana-agents":                        &V4OPTION{id: 136, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"v4-lost":                            &V4OPTION{id: 137, mode: V4MODE_STRING, min: 1},
+		"v4-capwap-access-controller":        &V4OPTION{id: 138, mode: V4MODE_BINARY, min: 1},
+		"v4-address-mos":                     &V4OPTION{id: 139, mode: V4MODE_BINARY, min: 1},
+		"v4-fqdn-mos":                        &V4OPTION{id: 140, mode: V4MODE_BINARY, min: 1},
+		"sip-ua-domain":                      &V4OPTION{id: 141, mode: V4MODE_STRING, min: 1},
+		"v4-address-andsf":                   &V4OPTION{id: 142, mode: V4MODE_BINARY, min: 1},
+		"v4-geoloc":                          &V4OPTION{id: 144, mode: V4MODE_BINARY, min: 1},
+		"forcerenew-nonce-capable":           &V4OPTION{id: 145, mode: V4MODE_BINARY, min: 1},
+		"rdnss-selection":                    &V4OPTION{id: 146, mode: V4MODE_BINARY, min: 1},
+		"tftp-servers":                       &V4OPTION{id: 150, mode: V4MODE_INET4 | V4MODE_LIST, min: 4, step: 4},
+		"status-code":                        &V4OPTION{id: 151, mode: V4MODE_STRING, min: 1},
+		"base-time":                          &V4OPTION{id: 152, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"start-time-of-state":                &V4OPTION{id: 153, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"query-start-time":                   &V4OPTION{id: 154, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"query-end-time":                     &V4OPTION{id: 155, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"dhcp-state":                         &V4OPTION{id: 156, mode: V4MODE_INTEGER, min: 1, max: 1},
+		"data-source":                        &V4OPTION{id: 157, mode: V4MODE_INTEGER, min: 1, max: 1},
+		"v4-pcp-server":                      &V4OPTION{id: 158, mode: V4MODE_BINARY, min: 5},
+		"pxelinux-magic":                     &V4OPTION{id: 208, mode: V4MODE_BINARY, min: 4, max: 4},
+		"configuration-file":                 &V4OPTION{id: 209, mode: V4MODE_STRING, min: 1},
+		"path-prefix":                        &V4OPTION{id: 210, mode: V4MODE_STRING, min: 1},
+		"reboot-time":                        &V4OPTION{id: 211, mode: V4MODE_INTEGER, min: 4, max: 4},
+		"v6-6rd":                             &V4OPTION{id: 212, mode: V4MODE_BINARY, min: 1},
+		"v4-access-domain":                   &V4OPTION{id: 213, mode: V4MODE_STRING, min: 1},
+		"subnet-allocation":                  &V4OPTION{id: 220, mode: V4MODE_BINARY, min: 1},
+		"virtual-subnet-allocation":          &V4OPTION{id: 221, mode: V4MODE_BINARY, min: 1},
+		"private-01":                         &V4OPTION{id: 224, mode: V4MODE_BINARY, min: 1},
+		"private-02":                         &V4OPTION{id: 225, mode: V4MODE_BINARY, min: 1},
+		"private-03":                         &V4OPTION{id: 226, mode: V4MODE_BINARY, min: 1},
+		"private-04":                         &V4OPTION{id: 227, mode: V4MODE_BINARY, min: 1},
+		"private-05":                         &V4OPTION{id: 228, mode: V4MODE_BINARY, min: 1},
+		"private-06":                         &V4OPTION{id: 229, mode: V4MODE_BINARY, min: 1},
+		"private-07":                         &V4OPTION{id: 230, mode: V4MODE_BINARY, min: 1},
+		"private-08":                         &V4OPTION{id: 231, mode: V4MODE_BINARY, min: 1},
+		"private-09":                         &V4OPTION{id: 232, mode: V4MODE_BINARY, min: 1},
+		"private-10":                         &V4OPTION{id: 233, mode: V4MODE_BINARY, min: 1},
+		"private-11":                         &V4OPTION{id: 234, mode: V4MODE_BINARY, min: 1},
+		"private-12":                         &V4OPTION{id: 235, mode: V4MODE_BINARY, min: 1},
+		"private-13":                         &V4OPTION{id: 236, mode: V4MODE_BINARY, min: 1},
+		"private-14":                         &V4OPTION{id: 237, mode: V4MODE_BINARY, min: 1},
+		"private-15":                         &V4OPTION{id: 238, mode: V4MODE_BINARY, min: 1},
+		"private-16":                         &V4OPTION{id: 239, mode: V4MODE_BINARY, min: 1},
+		"private-17":                         &V4OPTION{id: 240, mode: V4MODE_BINARY, min: 1},
+		"private-18":                         &V4OPTION{id: 241, mode: V4MODE_BINARY, min: 1},
+		"private-19":                         &V4OPTION{id: 242, mode: V4MODE_BINARY, min: 1},
+		"private-20":                         &V4OPTION{id: 243, mode: V4MODE_BINARY, min: 1},
+		"private-21":                         &V4OPTION{id: 244, mode: V4MODE_BINARY, min: 1},
+		"private-22":                         &V4OPTION{id: 245, mode: V4MODE_BINARY, min: 1},
+		"private-23":                         &V4OPTION{id: 246, mode: V4MODE_BINARY, min: 1},
+		"private-24":                         &V4OPTION{id: 247, mode: V4MODE_BINARY, min: 1},
+		"private-25":                         &V4OPTION{id: 248, mode: V4MODE_BINARY, min: 1},
+		"private-26":                         &V4OPTION{id: 249, mode: V4MODE_BINARY, min: 1},
+		"private-27":                         &V4OPTION{id: 250, mode: V4MODE_BINARY, min: 1},
+		"private-28":                         &V4OPTION{id: 251, mode: V4MODE_BINARY, min: 1},
+		"private-29":                         &V4OPTION{id: 252, mode: V4MODE_BINARY, min: 1},
+		"private-30":                         &V4OPTION{id: 253, mode: V4MODE_BINARY, min: 1},
+		"private-31":                         &V4OPTION{id: 254, mode: V4MODE_BINARY, min: 1},
+	}
 )
 
 func init() {
@@ -299,23 +310,28 @@ func init() {
 
 func v4options(marshal, pretty bool) {
 	if marshal {
-		options := map[string]interface{}{}
+		options := map[string]map[string]any{}
 		for name, option := range V4OPTIONS {
-			options[name] = map[string]interface{}{"id": option.id, "mode": V4MODE_NAMES[option.mode&V4MODE_MASK], "list": option.mode&V4MODE_LIST != 0}
+			options[name] = map[string]any{"id": option.id, "mode": V4MODE_NAMES[option.mode&V4MODE_MASK]}
+			if option.mode&V4MODE_LIST != 0 {
+				options[name]["list"] = true
+			}
 		}
+		content, err := json.Marshal(options)
 		if pretty {
-			if content, err := json.MarshalIndent(options, "", "  "); err == nil {
-				fmt.Printf("%s\n", content)
-			}
-		} else {
-			if content, err := json.Marshal(options); err == nil {
-				fmt.Printf("%s\n", content)
-			}
+			content, err = json.MarshalIndent(options, "", "  ")
 		}
+		if err == nil {
+			os.Stdout.Write(append(content, '\n'))
+		}
+
 		return
 	}
-	fmt.Printf("option                                  type                                    id\n")
-	fmt.Printf("--------------------------------------- --------------------------------------- ---\n")
+
+	os.Stdout.WriteString(
+		"option                                  type                                    id\n" +
+			"--------------------------------------- --------------------------------------- ---\n",
+	)
 	ids := []int{}
 	for id := range V4ROPTIONS {
 		ids = append(ids, id)
@@ -328,56 +344,77 @@ func v4options(marshal, pretty bool) {
 		switch option.mode & V4MODE_MASK {
 		case V4MODE_BINARY:
 			mode = "hex-encoded blob"
+
 		case V4MODE_SBINARY:
 			mode = "colon-separated hex-encoded blob"
+
 		case V4MODE_INTEGER:
-			mode = fmt.Sprintf("%dbits integer", 8*option.min)
+			mode = strconv.Itoa(8*option.min) + "bits integer"
+
 		case V4MODE_DINTEGER:
 			mode = "dotted-integer (version)"
+
 		case V4MODE_BOOLEAN:
 			mode = "boolean"
+
 		case V4MODE_STRING:
 			mode = "string"
+
 		case V4MODE_INET4:
 			mode, plural = "IPv4 address", "es"
+
 		case V4MODE_INET4PAIR:
 			mode = "IPv4 addresses pair"
+
 		case V4MODE_CIDR4:
 			mode = "IPv4 CIDR block"
+
+		case V4MODE_DOMAIN:
+			mode = "DNS domain"
+
+		case V4MODE_ROUTE4:
+			mode = "IPv4 classless route"
+
 		case V4MODE_OPCODE:
 			mode = "BOOTP opcode"
+
 		case V4MODE_HWTYPE:
 			mode = "hardware address type"
+
 		case V4MODE_MSGTYPE:
 			mode = "DHCP message type"
+
 		case V4MODE_OPTION:
 			mode = "DHCP option"
 		}
-		fmt.Printf("%-40.40s", name)
+		os.Stdout.WriteString(ustr.String(name, -40))
 		if option.mode&V4MODE_LIST != 0 {
-			fmt.Printf("%-40.40s", fmt.Sprintf("%s%s list", mode, plural))
+			os.Stdout.WriteString(ustr.String(mode+plural+" list", -40))
+
 		} else {
-			fmt.Printf("%-40.40s", mode)
+			os.Stdout.WriteString(ustr.String(mode, -40))
 		}
 		if option.id > 0 {
-			fmt.Printf("%d", option.id)
+			os.Stdout.WriteString(strconv.Itoa(option.id) + "\n")
+
 		} else {
-			fmt.Printf("-")
+			os.Stdout.WriteString("-\n")
 		}
-		fmt.Printf("\n")
 	}
 }
 
 func v4parse(packet []byte) (frame FRAME, err error) {
 	frame = FRAME{}
 	if len(packet) < 240 {
-		return nil, fmt.Errorf(`invalid packet size %d`, len(packet))
+		return nil, errors.New("invalid packet size " + strconv.Itoa(len(packet)))
 	}
 	if opcode := V4OPCODES[packet[0]]; opcode == "" {
-		return nil, fmt.Errorf(`invalid opcode 0x%02x`, packet[0])
+		return nil, errors.New("invalid opcode " + strconv.Itoa(int(packet[0])))
+
 	} else {
 		if hwtype := V4HWTYPES[packet[1]]; hwtype == nil || int(packet[2]) > 16 || (hwtype.length != 0 && int(packet[2]) != hwtype.length) {
-			return nil, fmt.Errorf(`invalid hardware address type 0x%02x`, packet[1])
+			return nil, errors.New("invalid address type " + strconv.Itoa(int(packet[1])))
+
 		} else {
 			frame["bootp-opcode"] = opcode
 			frame["bootp-hardware-type"] = hwtype.name
@@ -385,22 +422,22 @@ func v4parse(packet []byte) (frame FRAME, err error) {
 		}
 	}
 	frame["bootp-relay-hops"] = int(packet[3])
-	frame["bootp-transaction-id"] = fmt.Sprintf("%08x", binary.BigEndian.Uint32(packet[4:]))
+	frame["bootp-transaction-id"] = ustr.Hex(packet[4:8])
 	frame["bootp-start-time"] = int(binary.BigEndian.Uint16(packet[8:]))
 	frame["bootp-broadcast"] = packet[10]&0x80 != 0
 	if value := binary.BigEndian.Uint32(packet[12:]); value != 0 {
-		frame["bootp-client-address"] = fmt.Sprintf("%d.%d.%d.%d", byte(value>>24), byte(value>>16), byte(value>>8), byte(value))
+		frame["bootp-client-address"] = ustr.IPv4(value)
 	}
 	if value := binary.BigEndian.Uint32(packet[16:]); value != 0 {
-		frame["bootp-assigned-address"] = fmt.Sprintf("%d.%d.%d.%d", byte(value>>24), byte(value>>16), byte(value>>8), byte(value))
+		frame["bootp-assigned-address"] = ustr.IPv4(value)
 	}
 	if value := binary.BigEndian.Uint32(packet[20:]); value != 0 {
-		frame["bootp-server-address"] = fmt.Sprintf("%d.%d.%d.%d", byte(value>>24), byte(value>>16), byte(value>>8), byte(value))
+		frame["bootp-server-address"] = ustr.IPv4(value)
 	}
 	if value := binary.BigEndian.Uint32(packet[24:]); value != 0 {
-		frame["bootp-relay-address"] = fmt.Sprintf("%d.%d.%d.%d", byte(value>>24), byte(value>>16), byte(value>>8), byte(value))
+		frame["bootp-relay-address"] = ustr.IPv4(value)
 	}
-	frame["client-hardware-address"] = strings.ReplaceAll(fmt.Sprintf("% x", packet[28:28+frame["bootp-hardware-length"].(int)]), " ", ":")
+	frame["client-hardware-address"] = ustr.Hex(packet[28:28+int(j.Number(frame["bootp-hardware-length"]))], ':')
 	offset := 44
 	if packet[offset] != 0 {
 		for ; offset < 107; offset++ {
@@ -423,93 +460,141 @@ func v4parse(packet []byte) (frame FRAME, err error) {
 		return frame, nil
 	}
 	offset = 240
+
 loop:
 	for offset < len(packet) {
 		switch packet[offset] {
 		case 0:
 			offset++
+
 		case 0xff:
 			break loop
+
 		default:
 			name := V4ROPTIONS[int(packet[offset])]
 			if name == "" {
-				name = fmt.Sprintf("%d", packet[offset])
+				name = strconv.Itoa(int(packet[offset]))
 			}
 			option := V4OPTIONS[name]
 			if option == nil {
-				option = &V4OPTION{int(packet[offset]), V4MODE_BINARY, 1, 0, 0}
+				option = &V4OPTION{id: int(packet[offset]), mode: V4MODE_BINARY, min: 1}
 			}
 			size := int(packet[offset+1])
-			if size < option.min || (option.max != 0 && size > option.max) && (option.multiple != 0 && size%option.multiple != 0) {
-				return nil, fmt.Errorf(`invalid size %d for option "%s"`, size, name)
+			if size < option.min || (option.max != 0 && size > option.max) && (option.step != 0 && size%option.step != 0) {
+				return nil, errors.New("invalid size " + strconv.Itoa(size) + " for option '" + name + "'")
 			}
 			if offset+2+size <= len(packet) {
 				frame[name] = 0
 				if option.mode&V4MODE_LIST != 0 {
-					frame[name] = []interface{}{}
+					frame[name] = []any{}
 				}
 				for index := offset + 2; index < offset+2+size; {
-					var value interface{}
+					var value any
 
 					switch option.mode & V4MODE_MASK {
 					case V4MODE_BINARY:
-						value = fmt.Sprintf("%x", packet[index:index+size])
+						value = ustr.Hex(packet[index : index+size])
+
 					case V4MODE_SBINARY:
-						value = strings.ReplaceAll(fmt.Sprintf("% x", packet[index:index+size]), " ", ":")
+						value = ustr.Hex(packet[index:index+size], ':')
+
 					case V4MODE_INTEGER:
 						switch option.min {
 						case 1:
 							value = int(packet[index])
+
 						case 2:
 							value = int(binary.BigEndian.Uint16(packet[index:]))
+
 						case 4:
 							value = int(binary.BigEndian.Uint32(packet[index:]))
+
 						case 8:
 							value = int(binary.BigEndian.Uint64(packet[index:]))
+
 						default:
-							return nil, fmt.Errorf(`invalid integer length %d for option "%s"`, option.min, name)
+							return nil, errors.New("invalid length " + strconv.Itoa(option.min) + " for option '" + name + "'")
 						}
+
 					case V4MODE_DINTEGER:
 						dinteger := ""
 						for position := index; position < index+size; position++ {
-							dinteger += fmt.Sprintf("%d.", packet[position])
+							dinteger += strconv.Itoa(int(packet[position])) + "."
 						}
-						value = strings.Trim(dinteger, ".")
+						value = strings.TrimRight(dinteger, ".")
+
 					case V4MODE_BOOLEAN:
 						value = packet[index] != 0
+
 					case V4MODE_STRING:
 						value = string(packet[offset+2 : offset+2+size])
+
 					case V4MODE_INET4:
-						address := binary.BigEndian.Uint32(packet[index:])
-						value = fmt.Sprintf("%d.%d.%d.%d", byte(address>>24), byte(address>>16), byte(address>>8), byte(address))
+						value = ustr.IPv4(binary.BigEndian.Uint32(packet[index:]))
+
 					case V4MODE_INET4PAIR:
-						address1 := binary.BigEndian.Uint32(packet[index:])
-						address2 := binary.BigEndian.Uint32(packet[index+4:])
-						value = fmt.Sprintf("%d.%d.%d.%d:%d.%d.%d.%d",
-							byte(address1>>24), byte(address1>>16), byte(address1>>8), byte(address1),
-							byte(address2>>24), byte(address2>>16), byte(address2>>8), byte(address2))
+						value = ustr.IPv4(binary.BigEndian.Uint32(packet[index:])) + ":" + ustr.IPv4(binary.BigEndian.Uint32(packet[index+4:]))
+
 					case V4MODE_CIDR4:
-						address, bmask := binary.BigEndian.Uint32(packet[index:]), binary.BigEndian.Uint32(packet[index+4:])
-						mask := net.IPv4Mask(byte(bmask>>24), byte(bmask>>16), byte(bmask>>8), byte(bmask))
+						mask := net.IPv4Mask(packet[index+4], packet[index+5], packet[index+6], packet[index+7])
 						size, _ := mask.Size()
-						value = fmt.Sprintf("%d.%d.%d.%d/%d", byte(address>>24), byte(address>>16), byte(address>>8), byte(address), size)
+						value = ustr.IPv4(binary.BigEndian.Uint32(packet[index:])) + "/" + strconv.Itoa(size)
+
+					case V4MODE_DOMAIN:
+						domain := ""
+						for index < offset+2+size {
+							if packet[index] == 0 {
+								index++
+								break
+							}
+							dsize := int(packet[index])
+							if index+dsize > offset+2+size {
+								domain = ""
+								break
+							}
+							domain += string(packet[index+1:index+1+dsize]) + "."
+							index += 1 + dsize
+						}
+						if domain != "" {
+							value = strings.TrimSuffix(domain, ".")
+						}
+
+					case V4MODE_ROUTE4:
+						if ones := int(packet[index]); ones <= 32 {
+							length, address := ones/8, uint32(0)
+							if ones%8 != 0 {
+								length++
+							}
+							for position := 0; position < length; position++ {
+								address += uint32(packet[index+1+position]) << ((3 - position) * 8)
+							}
+							if index+1+length+4 <= offset+2+size {
+								value = ustr.IPv4(address) + "/" + strconv.Itoa(ones) + ":" + ustr.IPv4(binary.BigEndian.Uint32(packet[index+1+length:]))
+								index += 1 + length + 4
+							}
+						}
+
 					case V4MODE_MSGTYPE:
 						if msgtype := V4MSGTYPES[packet[index]]; msgtype == nil {
-							return nil, fmt.Errorf(`invalid message type 0x%02x`, packet[index])
+							return nil, errors.New("invalid message type " + strconv.Itoa(int(packet[index])))
+
 						} else {
 							value = msgtype.name
 						}
+
 					case V4MODE_OPTION:
 						if value = V4ROPTIONS[int(packet[index])]; value == "" {
-							value = fmt.Sprintf("%d", packet[index])
+							value = strconv.Itoa(int(packet[index]))
 						}
 					}
+
 					if value == nil {
-						return nil, fmt.Errorf(`invalid value for option "%s"`, name)
+						return nil, errors.New("invalid value for option '" + name + "'")
 					}
 					if option.mode&V4MODE_LIST != 0 {
-						index += option.multiple
-						frame[name] = append(frame[name].([]interface{}), value)
+						index += option.step
+						frame[name] = append(frame[name].([]any), value)
+
 					} else {
 						index += size
 						frame[name] = value
@@ -522,115 +607,118 @@ loop:
 	if frame["dhcp-message-type"] == nil {
 		frame["dhcp-message-type"] = "request"
 	}
+
 	return frame, nil
 }
 
 func v4key(frame FRAME) string {
 	key := ""
-	if value, ok := frame["client-hardware-address"].(string); ok {
+	if value := j.String(frame["client-hardware-address"]); value != "" {
 		key += strings.ReplaceAll(value, ":", "")
 	}
-	if value, ok := frame["bootp-transaction-id"].(string); ok {
+	if value := j.String(frame["bootp-transaction-id"]); value != "" {
 		key += value
 	}
-	if value, ok := frame["dhcp-message-type"].(string); ok && V4RMSGTYPES[value] != 0 {
+	if value := j.String(frame["dhcp-message-type"]); value != "" && V4RMSGTYPES[value] != 0 {
 		if request := V4MSGTYPES[V4RMSGTYPES[value]].request; request != 0 {
-			key += fmt.Sprintf("%02x", request)
+			key += strconv.Itoa(int(request))
+
 		} else {
-			key += fmt.Sprintf("%02x", V4RMSGTYPES[value])
+			key += strconv.Itoa(int(V4RMSGTYPES[value]))
 		}
+
 	} else {
-		key += "01"
+		key += "1"
 	}
+
 	return key
 }
 
 func v4build(frame FRAME) (packet []byte, err error) {
 	packet = make([]byte, 4<<10)
 	dhcp := true
-	if value, ok := frame["dhcp-message-type"].(string); !ok || value == "" {
-		frame["dhcp-message-type"] = "request"
-		dhcp = false
+	if value := j.String(frame["dhcp-message-type"]); value == "" {
+		frame["dhcp-message-type"], dhcp = "request", false
 	}
-	if value := V4RMSGTYPES[frame["dhcp-message-type"].(string)]; value != 0 {
+	if value := V4RMSGTYPES[j.String(frame["dhcp-message-type"])]; value != 0 {
 		packet[0] = V4MSGTYPES[value].opcode
+
 	} else {
-		return nil, fmt.Errorf(`invalid message type "%v"`, frame["dhcp-message-type"])
+		return nil, errors.New("invalid message type '" + j.String(frame["dhcp-message-type"]) + "'")
 	}
-	if value, ok := frame["bootp-hardware-type"].(string); !ok || value == "" {
+	if value := j.String(frame["bootp-hardware-type"]); value == "" {
 		frame["bootp-hardware-type"] = "ethernet"
 	}
-	if value, ok := frame["bootp-hardware-length"].(float64); ok {
-		frame["bootp-hardware-length"] = int(value)
-	}
-	if value := V4RHWTYPES[frame["bootp-hardware-type"].(string)]; value != 0 {
+	if value := V4RHWTYPES[j.String(frame["bootp-hardware-type"])]; value != 0 {
 		packet[1] = value
 		if length := V4HWTYPES[value].length; length != 0 {
 			packet[2] = byte(length)
-		} else if value, ok := frame["bootp-hardware-length"].(int); ok && value <= 16 {
+
+		} else if value := j.Number(frame["bootp-hardware-length"]); value != 0 && value <= 16 {
 			packet[2] = byte(value)
 		}
+
 	} else {
-		return nil, fmt.Errorf(`invalid hardware address type "%v"`, frame["bootp-hardware-type"])
+		return nil, errors.New("invalid hardware address type '" + j.String(frame["bootp-hardware-type"]) + "'")
 	}
-	if value, ok := frame["bootp-relay-hops"].(float64); ok {
-		frame["bootp-relay-hops"] = int(value)
-	}
-	if value, ok := frame["bootp-relay-hops"].(int); ok {
+	if value := j.Number(frame["bootp-relay-hops"]); value != 0 && value < 32 {
 		packet[3] = byte(value)
 	}
-	if value, ok := frame["bootp-transaction-id"].(string); ok && len(value) == 8 {
-		if id, err := hex.DecodeString(value); err == nil {
-			copy(packet[4:], id)
-		} else {
-			return nil, fmt.Errorf(`invalid transaction id "%v"`, frame)
+	if value := j.String(frame["bootp-transaction-id"]); len(value) == 8 {
+		if _, err := ustr.Binarize(packet[4:], value); err != nil {
+			return nil, errors.New("invalid transaction id '" + value + "`")
 		}
 	}
-	if value, ok := frame["bootp-start-time"].(int); ok {
+	if value := j.Number(frame["bootp-start-time"]); value != 0 {
 		binary.BigEndian.PutUint16(packet[8:], uint16(value))
 	}
-	if value, ok := frame["bootp-broadcast"].(bool); ok && value {
+	if j.Boolean(frame["bootp-broadcast"]) {
 		packet[10] |= 0x80
 	}
-	if value, ok := frame["bootp-client-address"].(string); ok {
+	if value := j.String(frame["bootp-client-address"]); value != "" {
 		if address := net.ParseIP(value); address != nil && address.To4() != nil {
-			copy(packet[12:], address.To4()[:4])
+			copy(packet[12:16], address.To4())
+
 		} else {
-			return nil, fmt.Errorf(`invalid client address "%v"`, address)
+			return nil, errors.New("invalid client address '" + value + "'")
 		}
 	}
-	if value, ok := frame["bootp-assigned-address"].(string); ok {
+	if value := j.String(frame["bootp-assigned-address"]); value != "" {
 		if address := net.ParseIP(value); address != nil && address.To4() != nil {
-			copy(packet[16:], address.To4()[:4])
+			copy(packet[16:20], address.To4())
+
 		} else {
-			return nil, fmt.Errorf(`invalid assigned address "%v"`, address)
+			return nil, errors.New("invalid assigned address '" + value + "'")
 		}
 	}
-	if value, ok := frame["bootp-server-address"].(string); ok {
+	if value := j.String(frame["bootp-server-address"]); value != "" {
 		if address := net.ParseIP(value); address != nil && address.To4() != nil {
-			copy(packet[20:], address.To4()[:4])
+			copy(packet[20:24], address.To4())
+
 		} else {
-			return nil, fmt.Errorf(`invalid server address "%v"`, address)
+			return nil, errors.New("invalid server address '" + value + "'")
 		}
 	}
-	if value, ok := frame["bootp-relay-address"].(string); ok {
+	if value := j.String(frame["bootp-relay-address"]); value != "" {
 		if address := net.ParseIP(value); address != nil && address.To4() != nil {
-			copy(packet[24:], address.To4()[:4])
+			copy(packet[24:28], address.To4())
+
 		} else {
-			return nil, fmt.Errorf(`invalid relay address "%v"`, address)
+			return nil, errors.New("invalid relay address '" + value + "'")
 		}
 	}
-	if value, ok := frame["client-hardware-address"].(string); ok {
-		if !rcache.Get(fmt.Sprintf("^([0-9a-f][0-9a-f]:){%d}[0-9a-f][0-9a-f]$", packet[2]-1)).MatchString(value) {
-			return nil, fmt.Errorf(`invalid hardware address "%s"`, value)
-		} else {
-			hex.Decode(packet[28:], []byte(strings.ReplaceAll(value, ":", "")))
+	if value := j.String(frame["client-hardware-address"]); value != "" {
+		if !rcache.Get(`^([0-9a-f][0-9a-f]:){` + strconv.Itoa(int(packet[2])-1) + `}[0-9a-f][0-9a-f]$`).MatchString(value) {
+			return nil, errors.New("invalid hardware address '" + value + "'")
+
+		} else if _, err := ustr.Binarize(packet[28:28+int(packet[2])], strings.ReplaceAll(value, ":", "")); err != nil {
+			return nil, errors.New("invalid hardware address '" + value + "'")
 		}
 	}
-	if value, ok := frame["bootp-server-name"].(string); ok && value != "" {
+	if value := j.String(frame["bootp-server-name"]); value != "" {
 		copy(packet[44:107], value)
 	}
-	if value, ok := frame["bootp-filename"].(string); ok && value != "" {
+	if value := j.String(frame["bootp-filename"]); value != "" {
 		copy(packet[108:235], value)
 	}
 	if !dhcp {
@@ -655,199 +743,276 @@ func v4build(frame FRAME) (packet []byte, err error) {
 			if option.id < 1 {
 				continue
 			}
+
 		} else if id != 0 {
-			option = &V4OPTION{id, V4MODE_BINARY, 1, 0, 0}
+			option = &V4OPTION{id: id, mode: V4MODE_BINARY, min: 1}
 		}
 		if option == nil {
-			continue
+			return nil, errors.New("unknown option '" + name + "'")
 		}
-		if _, ok := value.([]interface{}); !ok {
-			value = []interface{}{value}
+		if _, ok := value.([]any); !ok {
+			value = []any{value}
 		}
-		if option.mode&V4MODE_LIST == 0 && len(value.([]interface{})) > 1 {
-			return nil, fmt.Errorf(`option "%s" is not a list of values`, name)
+		if option.mode&V4MODE_LIST == 0 && len(value.([]any)) > 1 {
+			return nil, errors.New("option '" + name + "' is scalar")
 		}
-
 		if offset >= len(packet)-256 {
-			return nil, fmt.Errorf(`packet size exceeded`)
+			return nil, errors.New("packet size exceeded")
 		}
 
 		packet[offset] = byte(option.id)
 		size := 0
-		for _, item := range value.([]interface{}) {
+		for _, item := range value.([]any) {
 			if _, ok := item.(float64); ok {
 				item = int(item.(float64))
 			}
 			switch option.mode & V4MODE_MASK {
 			case V4MODE_BINARY:
-				if tvalue, ok := item.(string); ok && tvalue != "" {
-					if !rcache.Get(fmt.Sprintf(`^([0-9a-f][0-9a-f]){1,%d}$`, 254-size)).MatchString(tvalue) {
-						return nil, fmt.Errorf(`invalid format "%v" for binary option "%s"`, item, name)
+				if ovalue := j.String(item); ovalue != "" {
+					if !rcache.Get(`^([0-9a-f][0-9a-f]){1,` + strconv.Itoa(254-size) + `}$`).MatchString(ovalue) {
+						return nil, errors.New("invalid format '" + ovalue + "' for binary option '" + name + "'")
+
 					} else {
-						hex.Decode(packet[offset+2+size:], []byte(tvalue))
-						size += len(tvalue) / 2
+						hex.Decode(packet[offset+2+size:], []byte(ovalue))
+						size += len(ovalue) / 2
 					}
+
 				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for binary option "%s"`, item, name)
+					return nil, errors.New("invalid value for binary option '" + name + "'")
 				}
+
 			case V4MODE_SBINARY:
-				if tvalue, ok := item.(string); ok && tvalue != "" {
-					if !rcache.Get(fmt.Sprintf(`^([0-9a-f][0-9a-f]:){0,%d}[0-9a-f][0-9a-f]$`, 253-size)).MatchString(tvalue) {
-						return nil, fmt.Errorf(`invalid format "%v" for separated-binary option "%s"`, item, name)
+				if ovalue := j.String(item); ovalue != "" {
+					if !rcache.Get(`^([0-9a-f][0-9a-f]:){0,` + strconv.Itoa(253-size) + `}[0-9a-f][0-9a-f]$`).MatchString(ovalue) {
+						return nil, errors.New("invalid format '" + ovalue + "' for separated-binary option '" + name + "'")
+
 					} else {
-						tvalue = strings.ReplaceAll(tvalue, ":", "")
-						hex.Decode(packet[offset+2+size:], []byte(tvalue))
-						size += len(tvalue) / 2
+						ovalue = strings.ReplaceAll(ovalue, ":", "")
+						hex.Decode(packet[offset+2+size:], []byte(ovalue))
+						size += len(ovalue) / 2
 					}
+
 				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for separated-binary option "%s"`, item, name)
+					return nil, errors.New("invalid value for separated-binary option '" + name + "'")
 				}
+
 			case V4MODE_INTEGER:
-				if tvalue, ok := item.(string); ok {
-					if tvalue, err := strconv.Atoi(tvalue); err == nil {
-						item = tvalue
-					}
+				switch option.min {
+				case 1:
+					packet[offset+2+size] = byte(j.Number(item))
+
+				case 2:
+					binary.BigEndian.PutUint16(packet[offset+2+size:], uint16(j.Number(item)))
+
+				case 4:
+					binary.BigEndian.PutUint32(packet[offset+2+size:], uint32(j.Number(item)))
+
+				case 8:
+					binary.BigEndian.PutUint64(packet[offset+2+size:], uint64(j.Number(item)))
+
+				default:
+					return nil, errors.New("invalid length " + strconv.Itoa(option.min) + " for integer option '" + name + "'")
+
 				}
-				if tvalue, ok := item.(int); ok {
-					switch option.min {
-					case 1:
-						packet[offset+2+size] = byte(tvalue)
-					case 2:
-						binary.BigEndian.PutUint16(packet[offset+2+size:], uint16(tvalue))
-					case 4:
-						binary.BigEndian.PutUint32(packet[offset+2+size:], uint32(tvalue))
-					case 8:
-						binary.BigEndian.PutUint64(packet[offset+2+size:], uint64(tvalue))
-					default:
-						return nil, fmt.Errorf(`invalid length %d for integer option "%s"`, option.min, name)
-					}
-					size += option.min
-				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for integer option "%s"`, item, name)
-				}
+				size += option.min
+
 			case V4MODE_DINTEGER:
-				if tvalue, ok := item.(string); ok && tvalue != "" {
-					if !rcache.Get(fmt.Sprintf(`^(\d+\.){0,%d}\d+$`, 253-size)).MatchString(tvalue) {
-						return nil, fmt.Errorf(`invalid format "%v" for dotted-integer option "%s"`, item, name)
+				if ovalue := j.String(item); ovalue != "" {
+					if !rcache.Get(`^(\d+\.){0,` + strconv.Itoa(253-size) + `}\d+$`).MatchString(ovalue) {
+						return nil, errors.New("invalid format '" + ovalue + "' for dotted-integer option '" + name + "'")
+
 					} else {
-						for _, integer := range strings.Split(tvalue, ".") {
+						for _, integer := range strings.Split(ovalue, ".") {
 							value, _ := strconv.Atoi(integer)
 							packet[offset+2+size] = byte(value)
 							size++
 						}
 					}
+
 				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for dotted-integer option "%s"`, item, name)
+					return nil, errors.New("invalid value for dotted-integer option '" + name + "'")
 				}
+
 			case V4MODE_BOOLEAN:
-				if tvalue, ok := item.(string); ok {
-					item = false
-					if value = strings.ToLower(strings.TrimSpace(tvalue)); value == "1" || value == "on" || value == "yes" || value == "true" {
-						item = true
-					}
+				if j.Boolean(item) {
+					packet[offset+2+size] = 1
 				}
-				if tvalue, ok := item.(bool); ok {
-					if tvalue {
-						packet[offset+2+size] = 1
-					}
-					size++
-				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for boolean option "%s"`, item, name)
-				}
+				size++
+
 			case V4MODE_STRING:
-				if tvalue, ok := item.(string); ok && tvalue != "" && len(tvalue) <= 254 {
-					copy(packet[offset+2+size:], tvalue)
-					size += len(tvalue)
+				if ovalue := j.String(item); ovalue != "" && len(ovalue) <= 254 {
+					copy(packet[offset+2+size:], ovalue)
+					size += len(ovalue)
+
 				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for string option "%s"`, item, name)
+					return nil, errors.New("invalid value for string option '" + name + "'")
 				}
+
 			case V4MODE_INET4:
-				if tvalue, ok := item.(string); ok {
-					if address := net.ParseIP(tvalue); address == nil || address.To4() == nil {
-						return nil, fmt.Errorf(`invalid format "%v" for inet4 option "%s"`, item, name)
+				if ovalue := j.String(item); ovalue != "" {
+					if address := net.ParseIP(ovalue); address == nil || address.To4() == nil {
+						return nil, errors.New("invalid format '" + ovalue + "' for inet4 option '" + name + "'")
+
 					} else {
 						copy(packet[offset+2+size:], address.To4()[:4])
 						size += 4
 					}
+
 				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for inet4 option "%s"`, item, name)
+					return nil, errors.New("invalid value for inet4 option '" + name + "'")
 				}
+
 			case V4MODE_INET4PAIR:
-				if tvalue, ok := item.(string); ok {
-					if matcher := rcache.Get(`^((?:\d+\.){3}\d+):((?:\d+\.){3}\d+)$`); !matcher.MatchString(tvalue) {
-						return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
-					} else {
-						matches := matcher.FindStringSubmatch(tvalue)
-						if address1 := net.ParseIP(matches[1]); address1 == nil || address1.To4() == nil {
-							return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
-						} else if address2 := net.ParseIP(matches[2]); address2 == nil || address2.To4() == nil {
-							return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
+				if ovalue := j.String(item); ovalue != "" {
+					if captures := rcache.Get(`^((?:\d+\.){3}\d+):((?:\d+\.){3}\d+)$`).FindStringSubmatch(ovalue); captures != nil {
+						if address1 := net.ParseIP(captures[1]); address1 == nil || address1.To4() == nil {
+							return nil, errors.New("invalid format '" + ovalue + "' for inet4pair option '" + name + "'")
+
+						} else if address2 := net.ParseIP(captures[2]); address2 == nil || address2.To4() == nil {
+							return nil, errors.New("invalid format '" + ovalue + "' for inet4pair option '" + name + "'")
+
 						} else {
 							copy(packet[offset+2+size:], address1.To4()[:4])
 							copy(packet[offset+2+size+4:], address2.To4()[:4])
 							size += 8
 						}
-					}
-				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for inet4pair option "%s"`, item, name)
-				}
-			case V4MODE_CIDR4:
-				if tvalue, ok := item.(string); ok {
-					if matcher := rcache.Get(`^((?:\d+\.){3}\d+)/(\d+)$`); !matcher.MatchString(tvalue) {
-						return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
+
 					} else {
-						matches := matcher.FindStringSubmatch(tvalue)
-						if address := net.ParseIP(matches[1]); address == nil || address.To4() == nil {
-							return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
+						return nil, errors.New("invalid format '" + ovalue + "' for inet4pair option '" + name + "'")
+					}
+
+				} else {
+					return nil, errors.New("invalid value for inet4pair option '" + name + "'")
+				}
+
+			case V4MODE_CIDR4:
+				if ovalue := j.String(item); ovalue != "" {
+					if captures := rcache.Get(`^((?:\d+\.){3}\d+)/(\d+)$`).FindStringSubmatch(ovalue); captures != nil {
+						if address := net.ParseIP(captures[1]); address == nil || address.To4() == nil {
+							return nil, errors.New("invalid format '" + ovalue + "' for cidr4 option '" + name + "'")
+
 						} else {
 							copy(packet[offset+2+size:], address.To4()[:4])
 							size += 4
-							ones, _ := strconv.Atoi(matches[2])
+							ones, _ := strconv.Atoi(captures[2])
 							mask := net.CIDRMask(ones, 32)
+							if mask == nil {
+								return nil, errors.New("invalid format '" + ovalue + "' for cidr4 option '" + name + "'")
+							}
 							copy(packet[offset+2+size:], mask[:4])
 							size += 4
 						}
+
+					} else {
+						return nil, errors.New("invalid format '" + ovalue + "' for cidr4 option '" + name + "'")
 					}
+
 				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for cidr4 option "%s"`, item, name)
+					return nil, errors.New("invalid value for cidr4 option '" + name + "'")
 				}
-			case V4MODE_MSGTYPE:
-				if tvalue, ok := item.(string); ok && V4RMSGTYPES[tvalue] != 0 {
-					packet[offset+2+size] = V4RMSGTYPES[tvalue]
+
+			case V4MODE_DOMAIN:
+				if ovalue := j.String(item); ovalue != "" && len(ovalue) < 254 && rcache.Get(`^[a-zA-Z]\.?([a-zA-Z0-9\-]+\.)*$`).MatchString(strings.Trim(ovalue, ".")+".") {
+					for _, part := range strings.Split(strings.Trim(ovalue, "."), ".") {
+						packet[offset+2+size] = byte(len(part))
+						copy(packet[offset+2+size+1:], part)
+						size += 1 + len(part)
+					}
+					packet[offset+2+size] = 0
 					size++
+
 				} else {
-					return nil, fmt.Errorf(`invalid message type "%v"`, item)
+					return nil, errors.New("invalid value for domain option '" + name + "'")
 				}
+
+			case V4MODE_ROUTE4:
+				if ovalue := j.String(item); ovalue != "" {
+					if matcher := rcache.Get(`^((?:\d+\.){3}\d+)/(\d+):((?:\d+\.){3}\d+)$`); !matcher.MatchString(ovalue) {
+						return nil, errors.New("invalid format '" + ovalue + "' for route4 option '" + name + "'")
+
+					} else {
+						captures := matcher.FindStringSubmatch(ovalue)
+						ones, _ := strconv.Atoi(captures[2])
+						if ones < 0 || ones > 32 {
+							return nil, errors.New("invalid format '" + ovalue + "' for route4 option '" + name + "'")
+						}
+						length := ones / 8
+						if ones%8 != 0 {
+							length++
+						}
+						packet[offset+2+size] = byte(ones)
+
+						address := net.ParseIP(captures[1])
+						if address == nil {
+							return nil, errors.New("invalid format '" + ovalue + "' for route4 option '" + name + "'")
+						}
+						address = address.To4()
+						copy(packet[offset+2+size+1:], address[:length])
+
+						address = net.ParseIP(captures[3])
+						if address == nil {
+							return nil, errors.New("invalid format '" + ovalue + "' for route4 option '" + name + "'")
+						}
+						address = address.To4()
+						copy(packet[offset+2+size+1+length:], address)
+
+						size += 1 + length + 4
+					}
+
+				} else {
+					return nil, errors.New("invalid value for route4 option '" + name + "'")
+				}
+
+			case V4MODE_MSGTYPE:
+				if ovalue := j.String(item); ovalue != "" && V4RMSGTYPES[ovalue] != 0 {
+					packet[offset+2+size] = V4RMSGTYPES[ovalue]
+					size++
+
+				} else {
+					return nil, errors.New("invalid message type")
+				}
+
 			case V4MODE_OPTION:
-				if tvalue, ok := item.(string); ok {
-					if option := V4OPTIONS[tvalue]; option != nil {
+				if ovalue := j.String(item); ovalue != "" {
+					if option := V4OPTIONS[ovalue]; option != nil {
 						packet[offset+2+size] = byte(option.id)
 						size++
+
 					} else {
-						if id, _ := strconv.Atoi(tvalue); id > 0 && id < 255 {
+						if id, _ := strconv.Atoi(ovalue); id > 0 && id < 255 {
 							packet[offset+2+size] = byte(id)
 							size++
+
 						} else {
-							return nil, fmt.Errorf(`invalid format "%v" for option "%s"`, item, name)
+							return nil, errors.New("invalid format '" + ovalue + "' for option '" + name + "'")
 						}
 					}
+
 				} else {
-					return nil, fmt.Errorf(`invalid format "%v" for option "%s"`, item, name)
+					return nil, errors.New("invalid value for option '" + name + "'")
 				}
+
 			default:
-				return nil, fmt.Errorf(`unknow type %d for option "%s"`, option.mode&V4MODE_MASK, name)
+				return nil, errors.New("unknow type " + strconv.Itoa(option.mode&V4MODE_MASK) + " for option '" + name + "'")
+			}
+			if size > 255 {
+				break
 			}
 		}
 		if (option.min != 0 && size < option.min) || (option.max != 0 && size > option.max) || size > 255 {
-			return nil, fmt.Errorf(`out-of-bounds size %d for option "%s"`, size, name)
+			return nil, errors.New("out-of-bounds size " + strconv.Itoa(size) + " for option '" + name + "'")
 		}
 		packet[offset+1] = byte(size)
 		offset += 2 + size
+		if offset > len(packet)-255 {
+			return nil, errors.New("oversized packet")
+		}
 	}
 	packet[offset] = 0xff
 	offset++
 	if offset < 300 {
 		offset = 300
 	}
+
 	return packet[:offset], nil
 }
