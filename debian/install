@@ -1,5 +1,2 @@
 pdhcp usr/bin
-support/conf.d /usr/share/pdhcp
-support/*.conf /usr/share/pdhcp
-support/http-backend /usr/share/pdhcp
 support/local-backend.py /usr/share/pdhcp

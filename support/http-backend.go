@@ -40,7 +40,7 @@ var (
 	lock      sync.RWMutex
 )
 
-func please(request map[string]interface{}, duration int64, first, last net.IP) (output string) {
+func please(request map[string]any, duration int64, first, last net.IP) (output string) {
 	client, start, end, caddress, raddress := "", binary.BigEndian.Uint32(first), binary.BigEndian.Uint32(last), "", ""
 	if value, ok := request["client-hardware-address"].(string); ok {
 		client = value
@@ -98,21 +98,20 @@ func please(request map[string]interface{}, duration int64, first, last net.IP) 
 	return
 }
 
-func assign(input, request map[string]interface{}, key, value string) (output map[string]interface{}) {
+func assign(input, request map[string]any, key, value string) (output map[string]any) {
 	output = input
-	if matcher := rcache.Get(`^(array|dup|drop|lease)\((.*?)\)$`); matcher != nil && matcher.MatchString(value) {
-		matches := matcher.FindStringSubmatch(value)
-		switch matches[1] {
+	if captures := rcache.Get(`^(array|dup|drop|lease)\((.*?)\)$`).FindStringSubmatch(value); captures != nil {
+		switch captures[1] {
 		case "array":
-			output[key] = strings.Split(matches[2], "|")
+			output[key] = strings.Split(captures[2], "|")
 		case "dup":
-			if value, ok := request[matches[2]]; ok {
+			if value, ok := request[captures[2]]; ok {
 				output[key] = value
 			}
 		case "drop":
 			delete(output, key)
 		case "lease":
-			for _, arange := range strings.Split(matches[2], "|") {
+			for _, arange := range strings.Split(captures[2], "|") {
 				if parts := strings.Split(strings.TrimSpace(arange), "-"); len(parts) == 2 {
 					if first := net.ParseIP(strings.TrimSpace(parts[0])); first != nil && first.To4() != nil {
 						if last := net.ParseIP(strings.TrimSpace(parts[1])); last != nil && last.To4() != nil {
@@ -135,10 +134,10 @@ func assign(input, request map[string]interface{}, key, value string) (output ma
 	return output
 }
 
-func build(input, request map[string]interface{}, path string) (output map[string]interface{}) {
+func build(input, request map[string]any, path string) (output map[string]any) {
 	output = input
 	if output == nil {
-		output = map[string]interface{}{}
+		output = map[string]any{}
 	}
 	if request == nil {
 		return output
@@ -172,15 +171,9 @@ func build(input, request map[string]interface{}, path string) (output map[strin
 					mvalue = strings.TrimSpace(mvalue[1:])
 				}
 				if regex {
-					if matcher := rcache.Get(mvalue); matcher != nil {
-						if matcher.MatchString(rvalue) {
-							if negate {
-								matched = false
-							}
-						} else {
-							if !negate {
-								matched = false
-							}
+					if rcache.Get(mvalue).MatchString(rvalue) {
+						if negate {
+							matched = false
 						}
 					} else {
 						if !negate {
@@ -223,7 +216,7 @@ func build(input, request map[string]interface{}, path string) (output map[strin
 }
 
 func handler(response http.ResponseWriter, request *http.Request) {
-	var frame map[string]interface{}
+	var frame map[string]any
 
 	if request.Method == http.MethodGet && request.URL.Path == "/leases" {
 		// TODO add IP/credentials-based ACL check
@@ -278,7 +271,7 @@ func handler(response http.ResponseWriter, request *http.Request) {
 					}
 				}
 				if _, ok := rframe["bootp-assigned-address"]; !ok {
-					log.Warn(map[string]interface{}{"event": "error", "error": fmt.Sprintf("cannot assign address to %v", frame["client-hardware-address"])})
+					log.Warn(map[string]any{"event": "error", "error": fmt.Sprintf("cannot assign address to %v", frame["client-hardware-address"])})
 					response.WriteHeader(http.StatusNotFound)
 					return
 				}
@@ -306,7 +299,7 @@ func main() {
 		os.Exit(2)
 	}
 	log = ulog.New(config.String("backend.log", "console(output=stdout)"))
-	log.Info(map[string]interface{}{"event": "start", "config": os.Args[1], "pid": os.Getpid(), "version": PROGVER})
+	log.Info(map[string]any{"event": "start", "config": os.Args[1], "pid": os.Getpid(), "version": PROGVER})
 	alog = ulog.New(config.String("backend.access"))
 
 	if path := config.String("backend.leases"); path != "" {
@@ -330,7 +323,7 @@ func main() {
 					TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
 				}
 				go func(server *http.Server, parts []string) {
-					log.Info(map[string]interface{}{"event": "listen", "listen": parts[0], "public": parts[1], "key": parts[2]})
+					log.Info(map[string]any{"event": "listen", "listen": parts[0], "public": parts[1], "key": parts[2]})
 					for {
 						server.ListenAndServeTLS("", "")
 						time.Sleep(time.Second)
@@ -344,7 +337,7 @@ func main() {
 					WriteTimeout: config.DurationBounds("backend.write_timeout", 15, 5, 30),
 				}
 				go func(server *http.Server, parts []string) {
-					log.Info(map[string]interface{}{"event": "listen", "listen": parts[0]})
+					log.Info(map[string]any{"event": "listen", "listen": parts[0]})
 					for {
 						server.ListenAndServe()
 						time.Sleep(time.Second)
@@ -398,10 +391,10 @@ func main() {
 		if _, err = uconfig.New(os.Args[1]); err == nil {
 			config.Load(os.Args[1])
 			log.Load(config.String("backend.log", "console(output=stdout)"))
-			log.Info(map[string]interface{}{"event": "reload", "config": os.Args[1], "pid": os.Getpid(), "version": PROGVER})
+			log.Info(map[string]any{"event": "reload", "config": os.Args[1], "pid": os.Getpid(), "version": PROGVER})
 			alog.Load(config.String("backend.access"))
 		} else {
-			log.Warn(map[string]interface{}{"event": "reload", "config": os.Args[1], "error": fmt.Sprintf("invalid configuration (%v)", err)})
+			log.Warn(map[string]any{"event": "reload", "config": os.Args[1], "error": fmt.Sprintf("invalid configuration (%v)", err)})
 		}
 	}
 }

@@ -1,13 +1,14 @@
 #!/bin/sh
 
+PROGNAME=pdhcp
 .PHONY: support
 
 # build targets
-all: pdhcp support
-pdhcp: *.go
-	@env GOPATH=/tmp/go go get && env GOPATH=/tmp/go CGO_ENABLED=0 go build -trimpath -o pdhcp
-	@-strip pdhcp 2>/dev/null || true
-	@#-upx -9 pdhcp 2>/dev/null || true
+all: $(PROGNAME) support
+$(PROGNAME): *.go
+	@env GOPATH=/tmp/go go get && env GOPATH=/tmp/go CGO_ENABLED=0 go build -trimpath -o $(PROGNAME)
+	@-strip $(PROGNAME) 2>/dev/null || true
+	@#-upx -9 $(PROGNAME) 2>/dev/null || true
 support:
 	@make -C support
 lint:
@@ -15,27 +16,21 @@ lint:
 	@-staticcheck ./... || true
 	@-gocritic check -enableAll ./... || true
 	@-govulncheck ./... || true
-clean:
-	@make -C support clean
 distclean:
+	@rm -f $(PROGNAME) *.upx
 	@make -C support distclean
-	@rm -f pdhcp *.upx
 deb:
 	@debuild -e GOROOT -e GOPATH -e PATH -i -us -uc -b
 debclean:
 	@debuild -- clean
-	@rm -f ../pdhcp_*
+	@rm -f ../$(PROGNAME)_*
 
 # run targets
-run: pdhcp
-	@./pdhcp -i eth0
-client: pdhcp
-	@./pdhcp -i veth0i
-local-backend: pdhcp
-	@./pdhcp -i br0 -b support/local-backend.py -w 4
-remote-backend: pdhcp
-	@./pdhcp -i eth0 -b http://remote.server.com/dhcp
-relay: pdhcp
-	@./pdhcp -i br0 -r localhost:6767
-remote-server: pdhcp
-	@./pdhcp -b support/local-backend.py -w 4 -p 6767
+client: $(PROGNAME)
+	@./$(PROGNAME) -i eth0 -d -P
+relay: $(PROGNAME)
+	@./$(PROGNAME) -i br0 -r localhost:6767
+local: $(PROGNAME)
+	@./$(PROGNAME) -i br0 -b support/local-backend.py -w 4
+remote: $(PROGNAME)
+	@./$(PROGNAME) -i br0 -b http://localhost:6767/dhcp

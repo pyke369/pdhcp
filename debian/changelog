@@ -1,41 +1,7 @@
-pdhcp (2.0.6) stable; urgency=medium
+pdhcp (2.3.0) stable; urgency=medium
 
-  * update to go 1.20
+  * upgrade to go 1.25
+  * add native support for DOMAIN and ROUTE4 options format
+  * refactor code to recent standards
 
- -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Sat, 04 Feb 2023 14:50:44 +0100
-
-pdhcp (2.0.5) stable; urgency=medium
-
-  * more fixes to service autostart madness
-
- -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Wed, 09 Sep 2020 15:25:47 +0200
-
-pdhcp (2.0.4) stable; urgency=medium
-
-  * do not start service by default _at all_
-
- -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Thu, 26 Mar 2020 14:53:57 +0100
-
-pdhcp (2.0.3) stable; urgency=medium
-
-  * upgrade TLS profile to 2020-intermediate
-
- -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Wed, 25 Mar 2020 13:48:04 +0100
-
-pdhcp (2.0.2) stable; urgency=medium
-
-  * check for forged IP address only when acting as local server/relay
-
- -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Tue, 24 Mar 2020 18:04:27 +0100
-
-pdhcp (2.0.1) stable; urgency=medium
-
-  * reverse code logic in responses to relays
-
- -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Mon, 23 Mar 2020 17:20:19 +0100
-
-pdhcp (2.0.0) stable; urgency=medium
-
-  * full rewrite in Golang
-
- -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Fri, 14 Feb 2020 17:36:47 +0100
+ -- Pierre-Yves Kerembellec <py.kerembellec@gmail.com>  Fri, 04 Sep 2025 00:00:00 +0000
